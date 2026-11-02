@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Скан #{{ scan.id }} · ASM Sentinel{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Скан #{{ scan.id }} <span class="badge st-{{ scan.status }}">{{ {'queued':'В очереди','running':'Идёт','done':'Готово','failed':'Ошибка'}.get(scan.status, scan.status) }}</span></h1>
+    <p class="muted"><a href="/targets/{{ scan.target_id }}">{{ scan.target_name }}</a> · <span class="mono">{{ scan.address }}</span> · {{ scan.created_at | dt }}</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn ghost" href="/scans/{{ scan.id }}/log" target="_blank">Лог</a>
+    <a class="btn ghost" href="/scans">← Сканирования</a>
+  </div>
+</div>
+
+{% if scan.status in ('queued', 'running') %}
+<div class="scan-live big-live">
+  <div class="scan-live-head"><b>{{ scan.stage }}</b><span class="muted small">{{ scan.progress }}%</span></div>
+  <div class="bar"><span style="width: {{ scan.progress }}%"></span></div>
+</div>
+{% endif %}
+{% if scan.error %}<div class="flash error">Ошибка: {{ scan.error }}</div>{% endif %}
+
+<div class="cards small-cards">
+  <div class="card"><div class="k">Открытых портов</div><div class="v sm">{{ stats.get('open_ports', ports | length) }}</div></div>
+  <div class="card"><div class="k">Веб-сервисов</div><div class="v sm">{{ stats.get('web_urls', 0) }}</div></div>
+  <div class="card"><div class="k">Находок nuclei</div><div class="v sm">{{ stats.get('nuclei', 0) }}</div></div>
+  <div class="card"><div class="k">Находок ZAP</div><div class="v sm">{{ stats.get('zap', 0) }}</div></div>
+</div>
+
+<h2>Порты</h2>
+{% if ports %}
+<table class="table compact">
+  <thead><tr><th>Порт</th><th>Сервис</th><th>Версия</th><th>URL</th><th>Заголовок</th></tr></thead>
+  <tbody>
+  {% for p in ports %}
+    <tr>
+      <td class="mono">{{ p.port }}/{{ p.proto }}</td>
+      <td>{{ p.service or '—' }}</td>
+      <td class="muted small">{{ (p.product ~ ' ' ~ p.version).strip() or '—' }}</td>
+      <td class="small">{{ p.url or '—' }}</td>
+      <td class="muted small">{{ p.http_title or '—' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">Портов не обнаружено.</div>
+{% endif %}
+
+<h2>Находки этого скана</h2>
+{% if findings %}
+<table class="table compact">
+  <thead><tr><th>Критичность</th><th>Уязвимость</th><th>Где</th><th>Статус</th></tr></thead>
+  <tbody>
+  {% for f in findings %}
+    <tr>
+      <td><span class="badge sev-{{ f.severity }}">{{ SEVERITY_LABEL.get(f.severity, f.severity) }}</span></td>
+      <td><a href="/findings/{{ f.id }}">{{ f.name | truncate(90) }}</a><div class="muted small">{{ f.source }}{% if f.template_id %} · {{ f.template_id }}{% endif %}</div></td>
+      <td class="mono small">{{ f.url or (f.host ~ ':' ~ (f.port or '')) }}</td>
+      <td><span class="badge st-{{ f.status }}">{{ STATUS_LABEL.get(f.status, f.status) }}</span></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">Ничего не найдено.</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+{% if scan.status in ('queued', 'running') %}
+<script>setTimeout(() => location.reload(), 5000);</script>
+{% endif %}
+{% endblock %}

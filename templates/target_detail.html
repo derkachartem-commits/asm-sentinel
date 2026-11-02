@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}{{ target.name }} · ASM Sentinel{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ target.name }}</h1>
+    <p class="muted mono">{{ target.address }} · каждые {{ target.interval_hours }} ч · ZAP: {{ target.zap_mode }}</p>
+  </div>
+  <div class="head-actions">
+    <button class="btn primary" data-scan="{{ target.id }}">Сканировать сейчас</button>
+    <a class="btn ghost" href="/targets/{{ target.id }}/edit">Изменить</a>
+    <a class="btn ghost" href="/targets">← Цели</a>
+  </div>
+</div>
+
+<div class="cards small-cards">
+  <div class="card"><div class="k">Последний скан</div><div class="v sm">{{ target.last_scan_at | dt }}</div></div>
+  <div class="card"><div class="k">Следующий скан</div><div class="v sm">{{ target.next_scan_at | dt }}</div></div>
+  <div class="card"><div class="k">Статус</div><div class="v sm">{{ 'включена' if target.enabled else 'выключена' }}</div></div>
+  <div class="card"><div class="k">Находок</div><div class="v sm">{{ findings | length }}</div></div>
+</div>
+
+<div id="active-block" class="hidden">
+  <h2>Текущее сканирование</h2>
+  <div id="active-list"></div>
+</div>
+
+<h2>Открытые порты {% if latest_scan %}<span class="muted small">скан #{{ latest_scan }}</span>{% endif %}</h2>
+{% if ports %}
+<table class="table compact">
+  <thead><tr><th>Порт</th><th>Сервис</th><th>Версия</th><th>HTTP</th><th>Заголовок</th></tr></thead>
+  <tbody>
+  {% for p in ports %}
+    <tr>
+      <td class="mono">{{ p.port }}/{{ p.proto }}</td>
+      <td>{{ p.service or '—' }}</td>
+      <td class="muted">{{ (p.product ~ ' ' ~ p.version).strip() or '—' }}</td>
+      <td>{{ 'web' if p.is_web else '—' }}{% if p.url %}<div class="small"><a href="{{ p.url }}" target="_blank" rel="noreferrer">{{ p.url | truncate(50) }}</a></div>{% endif %}</td>
+      <td class="muted">{{ p.http_title or '—' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">Порты ещё не собраны.</div>
+{% endif %}
+
+<h2>Уязвимости</h2>
+{% if findings %}
+<table class="table compact">
+  <thead><tr><th>Критичность</th><th>Уязвимость</th><th>Где</th><th>Статус</th><th>Проверена</th></tr></thead>
+  <tbody>
+  {% for f in findings %}
+    <tr>
+      <td><span class="badge sev-{{ f.severity }}">{{ SEVERITY_LABEL.get(f.severity, f.severity) }}</span></td>
+      <td><a href="/findings/{{ f.id }}">{{ f.name | truncate(80) }}</a><div class="muted small">{{ f.source }}{% if f.template_id %} · {{ f.template_id }}{% endif %}</div></td>
+      <td class="mono small">{{ f.url or (f.host ~ ':' ~ (f.port or '')) }}</td>
+      <td><span class="badge st-{{ f.status }}">{{ STATUS_LABEL.get(f.status, f.status) }}</span></td>
+      <td class="muted small">{{ f.last_seen | dt }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">Находок нет.</div>
+{% endif %}
+
+<h2>История сканирований</h2>
+{% if scans %}
+<table class="table compact">
+  <thead><tr><th>#</th><th>Начало</th><th>Статус</th><th>Этап</th><th>Длительность</th><th></th></tr></thead>
+  <tbody>
+  {% for s in scans %}
+    <tr>
+      <td class="mono"><a href="/scans/{{ s.id }}">{{ s.id }}</a></td>
+      <td class="small">{{ s.created_at | dt }}</td>
+      <td><span class="badge st-{{ s.status }}">{{ {'queued':'В очереди','running':'Идёт','done':'Готово','failed':'Ошибка'}.get(s.status, s.status) }}</span></td>
+      <td class="small">{{ s.stage }}</td>
+      <td class="small muted">{{ s.started_at | dt }}{% if s.finished_at %} → {{ s.finished_at | dt }}{% endif %}</td>
+      <td><a class="small" href="/scans/{{ s.id }}/log">лог</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">Сканирований ещё не было.</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+const targetId = {{ target.id }};
+async function pollActive() {
+  try {
+    const r = await fetch('/api/scans/active');
+    if (!r.ok) return;
+    const list = (await r.json()).filter(s => true);
+    const block = document.getElementById('active-block');
+    const box = document.getElementById('active-list');
+    if (!list.length) { block.classList.add('hidden'); return; }
+    block.classList.remove('hidden');
+    box.innerHTML = list.map(s => `
+      <div class="scan-live">
+        <div class="scan-live-head"><b>${s.target_name}</b>
+        <span class="badge st-${s.status}">${s.status === 'queued' ? 'В очереди' : 'Выполняется'}</span>
+        <span class="muted small">скан #${s.id}</span></div>
+        <div class="scan-stage">${s.stage}</div>
+        <div class="bar"><span style="width:${s.progress}%"></span></div>
+      </div>`).join('');
+  } catch (e) {}
+}
+document.querySelector('button[data-scan]').addEventListener('click', async (ev) => {
+  const btn = ev.currentTarget; btn.disabled = true;
+  const r = await fetch(`/api/targets/${targetId}/scan`, {method: 'POST'});
+  const data = await r.json();
+  if (data.scan_id) window.location = `/scans/${data.scan_id}`;
+  else { btn.disabled = false; pollActive(); }
+});
+setInterval(pollActive, 4000);
+pollActive();
+</script>
+{% endblock %}

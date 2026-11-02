@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Вход · ASM Sentinel</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+<div class="login-card">
+  <div class="brand big"><span class="logo">◈</span> ASM <b>SENTINEL</b></div>
+  <p class="muted">Управление поверхностью атаки</p>
+  {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+  <form method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>Пароль администратора</label>
+    <input type="password" name="password" autofocus autocomplete="current-password" required>
+    <button class="btn primary wide" type="submit">Войти</button>
+  </form>
+</div>
+</body>
+</html>

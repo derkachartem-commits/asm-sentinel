@@ -1,0 +1,20 @@
+services:
+  asm-sentinel:
+    build: .
+    container_name: asm-sentinel
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      ASM_ADMIN_PASSWORD: "${ASM_ADMIN_PASSWORD:-changeme}"
+      ASM_SECRET: "${ASM_SECRET:-}"
+      ASM_ZAP_MAX_URLS: "${ASM_ZAP_MAX_URLS:-5}"
+    volumes:
+      - ./data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN

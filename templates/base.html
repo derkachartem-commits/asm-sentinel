@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}ASM Sentinel{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">◈</span> ASM <b>SENTINEL</b></div>
+  <nav>
+    <a href="/" class="{{ 'active' if path == '/' else '' }}">Обзор</a>
+    <a href="/targets" class="{{ 'active' if path.startswith('/targets') else '' }}">Цели</a>
+    <a href="/scans" class="{{ 'active' if path.startswith('/scans') else '' }}">Сканирования</a>
+    <a href="/findings" class="{{ 'active' if path.startswith('/findings') else '' }}">Уязвимости</a>
+  </nav>
+  <div class="topright">
+    <span class="user">admin</span>
+    <a class="logout" href="/logout">Выйти</a>
+  </div>
+</header>
+<main class="container">
+  {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+<footer class="foot">ASM Sentinel · attack surface management · nmap + nuclei + ZAP</footer>
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Обзор · ASM Sentinel{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Обзор</h1><p class="muted">Состояние поверхности атаки</p></div>
+  <a class="btn primary" href="/targets/new">+ Добавить цель</a>
+</div>
+
+<div class="cards">
+  <div class="card"><div class="k">Активных целей</div><div class="v">{{ targets_count }}</div><div class="sub">в мониторинге</div></div>
+  <div class="card"><div class="k">Открытых уязвимостей</div><div class="v">{{ open_total }}</div><div class="sub">без учёта исправленных</div></div>
+  <div class="card"><div class="k critical-text">Critical + High</div><div class="v">{{ sev.get('critical', 0) + sev.get('high', 0) }}</div><div class="sub">{{ sev.get('critical', 0) }} критических</div></div>
+  <div class="card"><div class="k">Сканирований за 24ч</div><div class="v">{{ scans_24h }}</div><div class="sub">открытых портов: {{ ports_total }}</div></div>
+</div>
+
+<div id="active-block" class="{{ '' if active else 'hidden' }}">
+  <h2>Идёт сканирование</h2>
+  <div id="active-list">
+    {% for s in active %}
+    <div class="scan-live" data-scan="{{ s.id }}">
+      <div class="scan-live-head">
+        <b>{{ s.target_name }}</b>
+        <span class="badge st-{{ s.status }}">{{ 'В очереди' if s.status == 'queued' else 'Выполняется' }}</span>
+        <span class="muted small">скан #{{ s.id }}</span>
+      </div>
+      <div class="scan-stage">{{ s.stage }}</div>
+      <div class="bar"><span style="width: {{ s.progress }}%"></span></div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="grid-2">
+  <section>
+    <h2>Критичность</h2>
+    <div class="sev-bars">
+      {% for key in ['critical','high','medium','low','info'] %}
+      <div class="sev-row">
+        <span class="badge sev-{{ key }}">{{ SEVERITY_LABEL[key] }}</span>
+        <div class="bar thin"><span class="fill-{{ key }}" style="width: {{ (sev.get(key, 0) / (open_total or 1) * 100) | round(1) }}%"></span></div>
+        <b>{{ sev.get(key, 0) }}</b>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section>
+    <h2>Последние находки</h2>
+    {% if recent %}
+    <table class="table compact">
+      <tbody>
+      {% for f in recent %}
+        <tr>
+          <td class="w-sev"><span class="badge sev-{{ f.severity }}">{{ SEVERITY_LABEL.get(f.severity, f.severity) }}</span></td>
+          <td><a href="/findings/{{ f.id }}">{{ f.name | truncate(70) }}</a><div class="muted small">{{ f.target_name }}{% if f.url %} · {{ f.url | truncate(45) }}{% endif %}</div></td>
+          <td class="w-status"><span class="badge st-{{ f.status }}">{{ STATUS_LABEL.get(f.status, f.status) }}</span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">Находок пока нет. Добавьте цель и запустите сканирование.</div>
+    {% endif %}
+    <a class="link-more" href="/findings">Все уязвимости →</a>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function pollActive() {
+  try {
+    const r = await fetch('/api/scans/active');
+    if (!r.ok) return;
+    const list = await r.json();
+    const block = document.getElementById('active-block');
+    const box = document.getElementById('active-list');
+    if (!list.length) { block.classList.add('hidden'); return; }
+    block.classList.remove('hidden');
+    box.innerHTML = list.map(s => `
+      <div class="scan-live">
+        <div class="scan-live-head"><b>${s.target_name}</b>
+        <span class="badge st-${s.status}">${s.status === 'queued' ? 'В очереди' : 'Выполняется'}</span>
+        <span class="muted small">скан #${s.id}</span></div>
+        <div class="scan-stage">${s.stage}</div>
+        <div class="bar"><span style="width:${s.progress}%"></span></div>
+      </div>`).join('');
+  } catch (e) {}
+}
+setInterval(pollActive, 4000);
+</script>
+{% endblock %}

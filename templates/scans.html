@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Сканирования · ASM Sentinel{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Сканирования</h1><p class="muted">История запусков и их результаты</p></div>
+</div>
+
+<form class="filters" method="get" action="/scans">
+  <select name="target">
+    <option value="">Все цели</option>
+    {% for t in targets %}
+    <option value="{{ t.id }}" {{ 'selected' if target_id == t.id }}>{{ t.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="status">
+    <option value="">Любой статус</option>
+    {% for key, label in [('queued','В очереди'),('running','Идёт'),('done','Готово'),('failed','Ошибка')] %}
+    <option value="{{ key }}" {{ 'selected' if status == key }}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn" type="submit">Фильтр</button>
+  {% if qs %}<a class="btn ghost" href="/scans">Сбросить</a>{% endif %}
+  <span class="muted small">всего: {{ total }}</span>
+</form>
+
+{% if scans %}
+<table class="table">
+  <thead><tr><th>#</th><th>Цель</th><th>Создан</th><th>Статус</th><th>Этап</th><th>Длительность</th><th>Находки</th><th></th></tr></thead>
+  <tbody>
+  {% for s in scans %}
+    <tr>
+      <td class="mono"><a href="/scans/{{ s.id }}">{{ s.id }}</a></td>
+      <td><a href="/targets/{{ s.target_id }}">{{ s.target_name }}</a><div class="muted small mono">{{ s.address }}</div></td>
+      <td class="small">{{ s.created_at | dt }}</td>
+      <td><span class="badge st-{{ s.status }}">{{ {'queued':'В очереди','running':'Идёт','done':'Готово','failed':'Ошибка'}.get(s.status, s.status) }}</span></td>
+      <td class="small">{{ s.stage }}</td>
+      <td class="small muted">{{ s.started_at | dt }}{% if s.finished_at %}<br>→ {{ s.finished_at | dt }}{% endif %}</td>
+      <td class="mono">{{ (s.stats and (s.stats | from_json).get('findings')) or '—' }}</td>
+      <td><a class="small" href="/scans/{{ s.id }}">детали</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty big">Сканирований нет. Запустите скан из карточки цели.</div>
+{% endif %}
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn small ghost" href="/scans?page={{ page - 1 }}{{ '&' ~ qs if qs }}">← Назад</a>{% endif %}
+  <span class="muted">стр. {{ page }} из {{ pages }}</span>
+  {% if page < pages %}<a class="btn small ghost" href="/scans?page={{ page + 1 }}{{ '&' ~ qs if qs }}">Вперёд →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

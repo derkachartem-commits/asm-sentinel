@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Изменить цель' if target else 'Новая цель' }} · ASM Sentinel{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>{{ 'Изменить цель' if target else 'Новая цель' }}</h1><p class="muted">Параметры актива и расписания</p></div>
+  <a class="btn ghost" href="/targets">← К списку</a>
+</div>
+
+<form method="post" action="{{ action }}" class="form-card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="field">
+    <label>Название</label>
+    <input type="text" name="name" value="{{ target.name if target else '' }}" placeholder="Прод-контур / сайт" required>
+  </div>
+  <div class="field">
+    <label>Адрес</label>
+    <input type="text" name="address" value="{{ target.address if target else '' }}" placeholder="example.com, 10.0.0.5 или 10.0.0.0/24" required>
+    <div class="hint">Домен, IP или подсеть. Сканирование выполняется с сервера ASM Sentinel.</div>
+  </div>
+  <div class="row">
+    <div class="field">
+      <label>Интервал, часов</label>
+      <input type="number" name="interval_hours" min="1" value="{{ target.interval_hours if target else 24 }}">
+    </div>
+    <div class="field">
+      <label>Порты</label>
+      <input type="text" name="scan_ports" value="{{ target.scan_ports if target else '1-65535' }}">
+    </div>
+  </div>
+  <div class="row">
+    <div class="field">
+      <label>Режим ZAP</label>
+      <select name="zap_mode">
+        {% set zm = target.zap_mode if target else 'baseline' %}
+        <option value="baseline" {{ 'selected' if zm == 'baseline' }}>baseline — пассивный, быстрый</option>
+        <option value="full" {{ 'selected' if zm == 'full' }}>full — активный, долгий</option>
+        <option value="off" {{ 'selected' if zm == 'off' }}>off — без ZAP</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Критичность nuclei</label>
+      <input type="text" name="nuclei_severity" value="{{ target.nuclei_severity if target else 'critical,high,medium,low' }}">
+      <div class="hint">Через запятую: critical,high,medium,low,info</div>
+    </div>
+  </div>
+  <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if (not target or target.enabled) }}> Сканировать по расписанию</label>
+  <div class="form-actions">
+    <button class="btn primary" type="submit">Сохранить</button>
+    <a class="btn ghost" href="/targets">Отмена</a>
+  </div>
+</form>
+
+{% if target %}
+<form method="post" action="/targets/{{ target.id }}/delete" onsubmit="return confirm('Удалить цель и всю её историю?')" class="danger-zone">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button class="btn danger" type="submit">Удалить цель</button>
+</form>
+{% endif %}
+{% endblock %}

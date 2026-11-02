@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Уязвимости · ASM Sentinel{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Уязвимости</h1><p class="muted">История находок и статусы обработки</p></div>
+  <a class="btn ghost" href="/export/findings.csv{% if qs %}?{{ qs }}{% endif %}">Экспорт CSV</a>
+</div>
+
+<form class="filters" method="get" action="/findings">
+  <input type="text" name="q" value="{{ f_q }}" placeholder="Поиск: имя, URL, CVE, template">
+  <select name="target">
+    <option value="">Все цели</option>
+    {% for t in targets %}<option value="{{ t.id }}" {{ 'selected' if f_target == t.id }}>{{ t.name }}</option>{% endfor %}
+  </select>
+  <select name="severity">
+    <option value="">Критичность</option>
+    {% for key in ['critical','high','medium','low','info'] %}<option value="{{ key }}" {{ 'selected' if f_severity == key }}>{{ SEVERITY_LABEL[key] }}</option>{% endfor %}
+  </select>
+  <select name="status">
+    <option value="">Статус</option>
+    {% for key in STATUS_ORDER %}<option value="{{ key }}" {{ 'selected' if f_status == key }}>{{ STATUS_LABEL[key] }}</option>{% endfor %}
+  </select>
+  <select name="source">
+    <option value="">Источник</option>
+    <option value="nuclei" {{ 'selected' if f_source == 'nuclei' }}>nuclei</option>
+    <option value="zap" {{ 'selected' if f_source == 'zap' }}>ZAP</option>
+  </select>
+  <button class="btn" type="submit">Найти</button>
+  {% if qs %}<a class="btn ghost" href="/findings">Сбросить</a>{% endif %}
+  <span class="muted small">найдено: {{ total }}</span>
+</form>
+
+<form method="post" action="/findings/bulk" id="bulk-form">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="bulk-bar">
+  <span class="muted small">Отметить →</span>
+  <select name="status">
+    {% for key in STATUS_ORDER %}<option value="{{ key }}">{{ STATUS_LABEL[key] }}</option>{% endfor %}
+  </select>
+  <input type="text" name="note" placeholder="Комментарий (необязательно)">
+  <button class="btn small" type="submit">Обновить статус</button>
+</div>
+
+{% if findings %}
+<table class="table">
+  <thead><tr><th class="w-check"><input type="checkbox" id="check-all"></th><th>Критичность</th><th>Уязвимость</th><th>Цель</th><th>Где</th><th>Статус</th><th>Проверена</th></tr></thead>
+  <tbody>
+  {% for f in findings %}
+    <tr>
+      <td><input type="checkbox" name="ids" value="{{ f.id }}" class="row-check"></td>
+      <td><span class="badge sev-{{ f.severity }}">{{ SEVERITY_LABEL.get(f.severity, f.severity) }}</span></td>
+      <td><a href="/findings/{{ f.id }}">{{ f.name | truncate(80) }}</a>
+          <div class="muted small">{{ f.source }}{% if f.template_id %} · {{ f.template_id }}{% endif %}{% if f.cve %} · {{ f.cve }}{% endif %}</div></td>
+      <td><a href="/targets/{{ f.target_id }}">{{ f.target_name }}</a></td>
+      <td class="mono small">{{ (f.url or (f.host ~ ':' ~ (f.port or ''))) | truncate(50) }}</td>
+      <td><span class="badge st-{{ f.status }}">{{ STATUS_LABEL.get(f.status, f.status) }}</span></td>
+      <td class="muted small">{{ f.last_seen | dt }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty big">Ничего не найдено по заданным фильтрам.</div>
+{% endif %}
+</form>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn small ghost" href="/findings?page={{ page - 1 }}{{ '&' ~ qs if qs }}">← Назад</a>{% endif %}
+  <span class="muted">стр. {{ page }} из {{ pages }}</span>
+  {% if page < pages %}<a class="btn small ghost" href="/findings?page={{ page + 1 }}{{ '&' ~ qs if qs }}">Вперёд →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+const all = document.getElementById('check-all');
+if (all) all.addEventListener('change', () => {
+  document.querySelectorAll('.row-check').forEach(cb => cb.checked = all.checked);
+});
+document.getElementById('bulk-form')?.addEventListener('submit', (e) => {
+  if (!document.querySelectorAll('.row-check:checked').length) {
+    e.preventDefault();
+    alert('Отметьте хотя бы одну уязвимость');
+  }
+});
+</script>
+{% endblock %}

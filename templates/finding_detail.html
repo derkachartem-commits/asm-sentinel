@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}{{ finding.name | truncate(40) }} · ASM Sentinel{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1><span class="badge sev-{{ finding.severity }}">{{ SEVERITY_LABEL.get(finding.severity, finding.severity) }}</span> {{ finding.name }}</h1>
+    <p class="muted">Цель: <a href="/targets/{{ finding.target_id }}">{{ finding.target_name }}</a> · источник: {{ finding.source }}{% if finding.template_id %} · {{ finding.template_id }}{% endif %}</p>
+  </div>
+  <a class="btn ghost" href="/findings">← Уязвимости</a>
+</div>
+
+<div class="detail-grid">
+  <section class="panel">
+    <h2>Описание</h2>
+    <p class="pre">{{ finding.description or 'Описание не предоставлено.' }}</p>
+    {% if finding.solution %}
+    <h3>Решение</h3>
+    <p class="pre">{{ finding.solution }}</p>
+    {% endif %}
+    {% if finding.reference %}
+    <h3>Ссылки</h3>
+    <div class="pre small">{{ finding.reference }}</div>
+    {% endif %}
+    {% if finding.cve %}<p><b>CVE:</b> <span class="mono">{{ finding.cve }}</span>{% if finding.cvss %} · <b>CVSS:</b> {{ finding.cvss }}{% endif %}</p>{% endif %}
+
+    <h3>Технические детали</h3>
+    <table class="kv">
+      <tr><td>Хост</td><td class="mono">{{ finding.host or '—' }}{% if finding.port %}:{{ finding.port }}{% endif %}</td></tr>
+      <tr><td>URL</td><td class="mono small">{{ finding.url or '—' }}</td></tr>
+      <tr><td>Точка срабатывания</td><td class="mono small">{{ finding.matched_at or '—' }}</td></tr>
+      <tr><td>Впервые</td><td>{{ finding.first_seen | dt }}</td></tr>
+      <tr><td>Последний раз</td><td>{{ finding.last_seen | dt }}</td></tr>
+      <tr><td>Повторений</td><td>{{ finding.occurrences }}</td></tr>
+      <tr><td>Скан</td><td><a href="/scans/{{ finding.last_scan_id }}">#{{ finding.last_scan_id }}</a></td></tr>
+    </table>
+
+    <details class="raw">
+      <summary>Сырые данные сканера</summary>
+      <pre>{{ finding.raw }}</pre>
+    </details>
+  </section>
+
+  <aside class="panel">
+    <h2>Статус</h2>
+    <p><span class="badge st-{{ finding.status }} big-badge">{{ STATUS_LABEL.get(finding.status, finding.status) }}</span></p>
+    <form method="post" action="/findings/{{ finding.id }}/status" class="status-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Изменить на</label>
+      <select name="status">
+        {% for key in STATUS_ORDER %}<option value="{{ key }}" {{ 'selected' if finding.status == key }}>{{ STATUS_LABEL[key] }}</option>{% endfor %}
+      </select>
+      <label>Комментарий</label>
+      <textarea name="note" rows="3" placeholder="Причина, тикет, комментарий">{{ finding.note or '' }}</textarea>
+      <button class="btn primary wide" type="submit">Сохранить статус</button>
+    </form>
+
+    <h2>История</h2>
+    {% if events %}
+    <ul class="timeline">
+      {% for e in events %}
+      <li>
+        <div class="small muted">{{ e.ts | dt }}</div>
+        <div>
+          {% if e.type == 'status_change' %}
+            {{ STATUS_LABEL.get(e.old_status, e.old_status) }} → <b>{{ STATUS_LABEL.get(e.new_status, e.new_status) }}</b>
+          {% elif e.type == 'created' %}Обнаружено
+          {% elif e.type == 'reopened' %}Обнаружено повторно
+          {% else %}{{ e.type }}{% endif %}
+          <span class="muted small">· {{ e.actor }}</span>
+        </div>
+        {% if e.note %}<div class="small note">{{ e.note }}</div>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty">Событий нет.</div>
+    {% endif %}
+  </aside>
+</div>
+{% endblock %}

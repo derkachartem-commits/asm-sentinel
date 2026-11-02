@@ -1,0 +1,17 @@
+[Unit]
+Description=ASM Sentinel - attack surface management
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/asm-sentinel
+EnvironmentFile=/etc/asm-sentinel.env
+ExecStart=/opt/asm-sentinel/.venv/bin/python run.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
