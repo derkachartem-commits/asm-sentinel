@@ -30,6 +30,7 @@ systemctl daemon-reload
 echo "==> removing application"
 if [ "$PURGE" -eq 1 ]; then
     rm -rf "$INSTALL_DIR" "$ENV_FILE"
+    rmdir "$(dirname "$ENV_FILE")" 2>/dev/null || true
     id "$RUN_USER" >/dev/null 2>&1 && userdel "$RUN_USER" 2>/dev/null || true
     echo "    code, data, configuration and service user removed"
 else

@@ -7,6 +7,7 @@
 #   sudo ./install.sh --root              # run service as root (enables nmap SYN scan)
 #   sudo ./install.sh --no-zap            # skip ZAP download (web passive/active checks off)
 #   sudo ./install.sh --password 'S3cret' # preset admin password
+#   sudo ./install.sh --skip-deps         # do not run apt-get (deps preinstalled)
 #
 # The installer is idempotent: re-running it keeps the existing database,
 # secret key and admin password, and only updates code / dependencies.
@@ -24,6 +25,7 @@ BIND="${ASM_HOST:-127.0.0.1}"
 ADMIN_PASSWORD="${ASM_ADMIN_PASSWORD:-}"
 WITH_ZAP=1
 WITH_NUCLEI=1
+WITH_DEPS=1
 RUN_AS_ROOT=0
 NUCLEI_VERSION="${NUCLEI_VERSION:-3.11.0}"
 ZAP_VERSION="${ZAP_VERSION:-2.17.0}"
@@ -68,6 +70,7 @@ while [ $# -gt 0 ]; do
         --root)       RUN_AS_ROOT=1; shift ;;
         --no-zap)     WITH_ZAP=0; shift ;;
         --no-nuclei)  WITH_NUCLEI=0; shift ;;
+        --skip-deps)  WITH_DEPS=0; shift ;;
         -h|--help)    usage ;;
         *)            die "unknown option: $1 (try --help)" ;;
     esac
@@ -90,11 +93,18 @@ ok "${PRETTY_NAME:-$ID} · $(uname -m)"
 export DEBIAN_FRONTEND=noninteractive
 
 step "Installing system packages"
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends \
-    python3 python3-venv python3-pip \
-    nmap curl unzip ca-certificates openssl tar >/dev/null
-ok "python $(python3 -V | awk '{print $2}'), nmap $(nmap --version | head -1 | awk '{print $3}')"
+if [ "$WITH_DEPS" -eq 1 ]; then
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends \
+        python3 python3-venv python3-pip \
+        nmap curl unzip ca-certificates openssl tar >/dev/null
+    ok "python $(python3 -V | awk '{print $2}'), nmap $(nmap --version | head -1 | awk '{print $3}')"
+else
+    for bin in python3 nmap curl openssl tar; do
+        command -v "$bin" >/dev/null || die "$bin is missing and --skip-deps was given"
+    done
+    ok "system dependencies present"
+fi
 
 # ------------------------------------------------------------------ user
 
@@ -215,6 +225,7 @@ else
 fi
 SECRET="${PREV_SECRET:-$(umask 077; openssl rand -hex 32)}"
 
+mkdir -p "$ENV_DIR"
 umask 077
 cat > "$ENV_FILE" <<EOF
 # ASM Sentinel configuration
