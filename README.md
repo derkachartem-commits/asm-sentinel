@@ -255,4 +255,21 @@ ASM_ADMIN_PASSWORD=dev ASM_DATA_DIR=./data python3 run.py
 
 ## Лицензия
 
+## Офлайн-установка
+
+В репозитории лежат Python-колёса для офлайн-установки:
+`vendor/wheels/` (Linux x86_64, CPython 3.12).
+
+```bash
+tar xzf asm-sentinel-1.1.0.tar.gz
+cd asm-sentinel-1.1.0
+sudo ./install-offline.sh --root
+```
+
+Установщик не обращается к сети: ставит зависимости из `vendor/wheels`,
+создаёт venv, конфиг и systemd-сервис. Системные `nmap`, `nuclei` и ZAP
+должны быть подготовлены заранее. Подробная инструкция — [docs/OFFLINE.md](docs/OFFLINE.md).
+
+## Лицензия
+
 [MIT](LICENSE)
