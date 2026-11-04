@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Новое сканирование · ASM Sentinel{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Новое сканирование</h1><p class="muted">Выберите модули, которые нужно запустить</p></div>
+  <a class="btn ghost" href="/scans">← К списку</a>
+</div>
+
+{% if targets %}
+<form method="post" action="/scans/new" class="form-card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="field">
+    <label>Цель</label>
+    <select name="target" id="target-select" required>
+      {% for t in targets %}
+      <option value="{{ t.id }}" data-zap="{{ t.zap_mode }}" {{ 'selected' if target_id == t.id }}>{{ t.name }} — {{ t.address }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <label class="check"><input type="checkbox" name="nmap" value="1" checked> nmap — порты и сервисы</label>
+  <div class="hint">Обнаружение открытых портов и определение сервисов. Без него nuclei и ZAP проверят только адрес цели.</div>
+
+  <label class="check"><input type="checkbox" name="brute" value="1"> Проверка слабых паролей (bruter.py)</label>
+  <div class="hint">SMB, SSH, MSSQL, PostgreSQL по словарям. Найденные учётные данные добавляются как уязвимость critical. Может заблокировать учётные записи — используйте осознанно.</div>
+
+  <label class="check"><input type="checkbox" name="nuclei" value="1" checked> nuclei — известные уязвимости</label>
+  <div class="hint">Проверка веб-сервисов по шаблонам nuclei с критичностью из настроек цели.</div>
+
+  <label class="check"><input type="checkbox" name="zap" id="zap-check" value="1" checked> ZAP — сканирование веб-приложений</label>
+  <div class="hint">Режим ZAP берётся из настроек цели (baseline/full/off).</div>
+
+  <div class="form-actions">
+    <button class="btn primary" type="submit">Запустить</button>
+    <a class="btn ghost" href="/scans">Отмена</a>
+  </div>
+</form>
+<script>
+(function () {
+  const select = document.getElementById('target-select');
+  const zap = document.getElementById('zap-check');
+  function syncZap() {
+    const mode = select.options[select.selectedIndex].dataset.zap || 'off';
+    zap.checked = mode !== 'off';
+    zap.disabled = mode === 'off';
+  }
+  select.addEventListener('change', syncZap);
+  syncZap();
+})();
+</script>
+{% else %}
+<div class="empty big">Сначала создайте цель. <a href="/targets/new">Новая цель →</a></div>
+{% endif %}
+{% endblock %}

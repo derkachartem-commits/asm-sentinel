@@ -5,6 +5,13 @@
   <div>
     <h1>Скан #{{ scan.id }} <span class="badge st-{{ scan.status }}">{{ {'queued':'В очереди','running':'Идёт','done':'Готово','failed':'Ошибка'}.get(scan.status, scan.status) }}</span></h1>
     <p class="muted"><a href="/targets/{{ scan.target_id }}">{{ scan.target_name }}</a> · <span class="mono">{{ scan.address }}</span> · {{ scan.created_at | dt }}</p>
+    {% set opts = scan.options | from_json %}
+    <p class="small">Модули:
+      {% if opts.get('nmap', True) %}<span class="badge">nmap</span>{% endif %}
+      {% if opts.get('brute') %}<span class="badge">слабые пароли</span>{% endif %}
+      {% if opts.get('nuclei', True) %}<span class="badge">nuclei</span>{% endif %}
+      {% if opts.get('zap', True) %}<span class="badge">ZAP</span>{% endif %}
+    </p>
   </div>
   <div class="head-actions">
     <a class="btn ghost" href="/scans/{{ scan.id }}/log" target="_blank">Лог</a>
@@ -24,6 +31,7 @@
   <div class="card"><div class="k">Открытых портов</div><div class="v sm">{{ stats.get('open_ports', ports | length) }}</div></div>
   <div class="card"><div class="k">Веб-сервисов</div><div class="v sm">{{ stats.get('web_urls', 0) }}</div></div>
   <div class="card"><div class="k">Находок nuclei</div><div class="v sm">{{ stats.get('nuclei', 0) }}</div></div>
+  <div class="card"><div class="k">Слабых паролей</div><div class="v sm">{{ stats.get('brute', 0) }}</div></div>
   <div class="card"><div class="k">Находок ZAP</div><div class="v sm">{{ stats.get('zap', 0) }}</div></div>
 </div>
 

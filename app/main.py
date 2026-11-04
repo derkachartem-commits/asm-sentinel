@@ -29,6 +29,7 @@ STATUS_LABEL = {
 }
 STATUS_ORDER = ["new", "in_progress", "fixed", "false_positive", "accepted"]
 SEV_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+SCAN_OPTION_KEYS = ("nmap", "brute", "nuclei", "zap")
 
 app = FastAPI(title="ASM Sentinel", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -284,11 +285,17 @@ async def target_delete(request: Request, target_id: int):
 
 
 @app.post("/targets/{target_id}/scan")
-def target_scan(request: Request, target_id: int):
+async def target_scan(request: Request, target_id: int):
     target = db.query_one("SELECT id FROM targets WHERE id=?", (target_id,))
     if not target:
         return redirect("/targets", "Цель не найдена")
-    scan_id, created = scanner.enqueue(target_id)
+    form = await request.form()
+    if form.get("csrf") and not csrf_ok(request, str(form.get("csrf", ""))):
+        return redirect(f"/targets/{target_id}", "Ошибка CSRF, повторите")
+    options = {key: bool(form.get(key)) for key in SCAN_OPTION_KEYS} if form else None
+    if options is not None and not any(options.values()):
+        return redirect(f"/scans/new?target={target_id}", "Выберите хотя бы один модуль")
+    scan_id, created = scanner.enqueue(target_id, options)
     return redirect(f"/scans/{scan_id}", "Сканирование поставлено в очередь" if created else "Сканирование уже выполняется")
 
 
@@ -315,6 +322,29 @@ def scans_page(request: Request, target: int | None = None, status: str = "", pa
     targets = db.query("SELECT id, name FROM targets ORDER BY name")
     return render(request, "scans.html", scans=rows, page=page, pages=max(1, (total + per - 1) // per),
                   total=total, qs=qs, target_id=target, status=status, targets=targets)
+
+
+@app.get("/scans/new", response_class=HTMLResponse)
+def scan_new(request: Request, target: int | None = None):
+    targets = db.query("SELECT id, name, address, zap_mode FROM targets ORDER BY name")
+    selected = target if any(t["id"] == target for t in targets) else (targets[0]["id"] if targets else None)
+    return render(request, "scan_form.html", targets=targets, target_id=selected)
+
+
+@app.post("/scans/new")
+async def scan_create(request: Request):
+    form = await request.form()
+    if not csrf_ok(request, str(form.get("csrf", ""))):
+        return redirect("/scans/new", "Ошибка CSRF, повторите")
+    raw_target = str(form.get("target", ""))
+    target_id = int(raw_target) if raw_target.isdigit() else 0
+    if not db.query_one("SELECT id FROM targets WHERE id=?", (target_id,)):
+        return redirect("/scans/new", "Выберите цель")
+    options = {key: bool(form.get(key)) for key in SCAN_OPTION_KEYS}
+    if not any(options.values()):
+        return redirect(f"/scans/new?target={target_id}", "Выберите хотя бы один модуль")
+    scan_id, created = scanner.enqueue(target_id, options)
+    return redirect(f"/scans/{scan_id}", "Сканирование поставлено в очередь" if created else "Сканирование уже выполняется")
 
 
 @app.get("/scans/{scan_id}", response_class=HTMLResponse)
@@ -360,7 +390,7 @@ def _findings_query(args):
     if args.get("status") in STATUS_LABEL:
         where.append("f.status=?")
         params.append(args["status"])
-    if args.get("source") in ("nuclei", "zap"):
+    if args.get("source") in ("nuclei", "zap", "brute"):
         where.append("f.source=?")
         params.append(args["source"])
     if args.get("q"):
@@ -472,10 +502,19 @@ def export_csv(target: int | None = None, severity: str = "", status: str = "", 
 # ---------------------------------------------------------------- api
 
 @app.post("/api/targets/{target_id}/scan")
-def api_scan(target_id: int):
+async def api_scan(target_id: int, request: Request):
     if not db.query_one("SELECT id FROM targets WHERE id=?", (target_id,)):
         return JSONResponse({"error": "not found"}, status_code=404)
-    scan_id, created = scanner.enqueue(target_id)
+    options = None
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if isinstance(body, dict):
+        options = {key: bool(body.get(key, True)) for key in SCAN_OPTION_KEYS}
+        if not any(options.values()):
+            return JSONResponse({"error": "no modules selected"}, status_code=400)
+    scan_id, created = scanner.enqueue(target_id, options)
     return JSONResponse({"scan_id": scan_id, "created": created})
 
 

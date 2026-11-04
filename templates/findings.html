@@ -24,6 +24,7 @@
     <option value="">Источник</option>
     <option value="nuclei" {{ 'selected' if f_source == 'nuclei' }}>nuclei</option>
     <option value="zap" {{ 'selected' if f_source == 'zap' }}>ZAP</option>
+    <option value="brute" {{ 'selected' if f_source == 'brute' }}>слабые пароли</option>
   </select>
   <button class="btn" type="submit">Найти</button>
   {% if qs %}<a class="btn ghost" href="/findings">Сбросить</a>{% endif %}

@@ -7,7 +7,7 @@
     <p class="muted mono">{{ target.address }} · каждые {{ target.interval_hours }} ч · ZAP: {{ target.zap_mode }}</p>
   </div>
   <div class="head-actions">
-    <button class="btn primary" data-scan="{{ target.id }}">Сканировать сейчас</button>
+    <a class="btn primary" href="/scans/new?target={{ target.id }}">Сканировать</a>
     <a class="btn ghost" href="/targets/{{ target.id }}/edit">Изменить</a>
     <a class="btn ghost" href="/targets">← Цели</a>
   </div>
@@ -108,13 +108,6 @@ async function pollActive() {
       </div>`).join('');
   } catch (e) {}
 }
-document.querySelector('button[data-scan]').addEventListener('click', async (ev) => {
-  const btn = ev.currentTarget; btn.disabled = true;
-  const r = await fetch(`/api/targets/${targetId}/scan`, {method: 'POST'});
-  const data = await r.json();
-  if (data.scan_id) window.location = `/scans/${data.scan_id}`;
-  else { btn.disabled = false; pollActive(); }
-});
 setInterval(pollActive, 4000);
 pollActive();
 </script>

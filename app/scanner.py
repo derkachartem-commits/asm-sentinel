@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
-from . import db
+from . import bruter, db
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 WEB_PORTS = {
@@ -26,6 +26,8 @@ COMMON_PORTS = {
 }
 MAX_PORTS_PER_HOST = int(os.environ.get("ASM_MAX_PORTS_PER_HOST", "300"))
 SERVICE_CHUNK = 200
+DEFAULT_SCAN_OPTIONS = {"nmap": True, "brute": False, "nuclei": True, "zap": True}
+BRUTE_PORTS = set(bruter.DEFAULT_PORTS)
 TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -503,89 +505,202 @@ def _set_scan(scan_id, **fields):
     db.execute(f"UPDATE scans SET {cols} WHERE id=?", (*fields.values(), scan_id))
 
 
+def _scan_options(raw):
+    data = {}
+    if isinstance(raw, dict):
+        data = raw
+    elif raw:
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            data = {}
+    if not isinstance(data, dict):
+        data = {}
+    return {key: bool(data.get(key, default)) for key, default in DEFAULT_SCAN_OPTIONS.items()}
+
+
+def _seed_urls(address, log_path):
+    """URL для nuclei/ZAP, когда nmap отключён."""
+    if not address or "/" in address:
+        return []
+    urls = []
+    for port in (443, 80):
+        probe = probe_http(address, port)
+        if probe and probe.get("url") and probe["url"] not in urls:
+            urls.append(probe["url"])
+    if not urls:
+        urls = [f"https://{address}/", f"http://{address}/"]
+        _log(log_path, "!! nmap отключён, цель не ответила на пробу — nuclei/ZAP пойдут по адресу напрямую")
+    return urls
+
+
+def _brute_to_finding(item):
+    service = item["service"]
+    login = item["login"]
+    password = item["password"]
+    dbname = item.get("db") or ""
+    where = f"{item['host']}:{item['port']}" + (f"/{dbname}" if dbname else "")
+    details = f"Подобраны учётные данные {service} на {where}: логин «{login}», пароль «{password}»."
+    if dbname:
+        details += f" База данных: {dbname}."
+    if item.get("info"):
+        details += f" {item['info']}"
+    return {
+        "source": "brute",
+        "template_id": f"weak-password-{service.lower()}-{login}",
+        "name": f"Слабый пароль {service}: {login}",
+        "severity": "critical",
+        "host": item["host"],
+        "port": item["port"],
+        "url": f"{service.lower()}://{item['host']}:{item['port']}",
+        "matched_at": where,
+        "description": details,
+        "solution": "Сменить пароль на сложный и уникальный, отключить служебные/дефолтные учётные записи, "
+                    "ограничить доступ по сети, включить MFA и блокировку после неудачных попыток.",
+        "reference": "https://owasp.org/www-community/vulnerabilities/Use_of_hard-coded_password",
+        "cve": "",
+        "cvss": 9.8,
+        "raw": item,
+    }
+
+
+def _run_brute(scan, ports, log_path):
+    address = scan["address"]
+    targets = {}
+    for p in ports or []:
+        port = int(p["port"])
+        if port in BRUTE_PORTS:
+            targets.setdefault(p["host"], set()).add(port)
+    if targets:
+        targets = {host: sorted(found) for host, found in targets.items()}
+    elif address and "/" not in address:
+        targets = {address: sorted(bruter.DEFAULT_PORTS)}
+    else:
+        _log(log_path, "!! brute: нет подходящих хостов/портов (нужен nmap или одиночный адрес)")
+        return []
+    if len(targets) > bruter.MAX_HOSTS:
+        _log(log_path, f"!! brute: хостов {len(targets)}, проверяю первые {bruter.MAX_HOSTS}")
+        targets = dict(list(targets.items())[:bruter.MAX_HOSTS])
+    available = bruter.modules_available()
+    missing = [name for name, ok in available.items() if not ok]
+    if missing:
+        _log(log_path, "!! brute: не установлены python-модули: " + ", ".join(missing) +
+             " — соответствующие сервисы пропускаются")
+    findings = []
+    for host, host_ports in targets.items():
+        _log(log_path, f"brute: {host} порты {host_ports}")
+        for item in bruter.check_host(host, host_ports, log_path):
+            findings.append(_brute_to_finding(item))
+    return findings
+
+
 def run_pipeline(scan_id):
     _ensure_dirs()
     log_path = os.path.join(LOG_DIR, f"scan-{scan_id}.log")
     scan = db.query_one(
-        "SELECT s.id AS scan_id, s.target_id, t.name AS target_name, t.address, t.scan_ports, "
+        "SELECT s.id AS scan_id, s.target_id, s.options, t.name AS target_name, t.address, t.scan_ports, "
         "t.zap_mode, t.nuclei_severity FROM scans s JOIN targets t ON t.id = s.target_id WHERE s.id=?",
         (scan_id,),
     )
     if not scan:
         return
     target_id = scan["target_id"]
-    _set_scan(scan_id, status="running", stage="Сканирование портов (nmap)", progress=5, started_at=db.now())
+    options = _scan_options(scan["options"])
+    _set_scan(scan_id, status="running", stage="Подготовка сканирования", progress=2, started_at=db.now())
     _log(log_path, f"=== scan #{scan_id} target={scan['target_name']} ({scan['address']}) ===")
-    stats = {"open_ports": 0, "web_urls": 0, "nuclei": 0, "zap": 0, "findings": 0, "hosts": 0}
+    _log(log_path, f"options: {options}")
+    stats = {"open_ports": 0, "web_urls": 0, "nuclei": 0, "brute": 0, "zap": 0, "findings": 0, "hosts": 0,
+             "options": options}
     try:
-        ports = nmap_discovery(scan["address"], scan["scan_ports"] or "1-65535", log_path)
-        stats["open_ports_raw"] = len(ports)
-        _log(log_path, f"open ports: {len(ports)}")
-
-        by_host = {}
-        for p in ports:
-            by_host.setdefault(p["host"], []).append(p)
-        limited = []
-        for host, items in by_host.items():
-            if len(items) > MAX_PORTS_PER_HOST:
-                _log(log_path, f"!! {host}: {len(items)} open ports reported, limiting to {MAX_PORTS_PER_HOST}")
-                stats["ports_truncated"] = True
-                items = sorted(items, key=lambda x: (x["port"] not in COMMON_PORTS, x["port"]))[:MAX_PORTS_PER_HOST]
-            limited.extend(items)
-        ports = limited
-        stats["open_ports"] = len(ports)
-        stats["hosts"] = len({p["host"] for p in ports})
-        _set_scan(scan_id, stage="Определение сервисов (nmap -sV)", progress=25)
-        services = []
-        for host, host_items in by_host.items():
-            services.extend(nmap_services(host, [p["port"] for p in host_items], log_path))
-        svc_index = {(s["host"], s["port"]): s for s in services}
-        for p in ports:
-            svc = svc_index.get((p["host"], p["port"]))
-            if svc:
-                p.update({k: svc[k] for k in ("service", "product", "version", "extrainfo", "title") if svc.get(k)})
-        _set_scan(scan_id, stage="Поиск веб-интерфейсов", progress=35)
-
+        ports = []
         urls = []
-        probe_budget = int(os.environ.get("ASM_MAX_WEB_PROBES", "80"))
-        with db.connect() as con:
-            con.execute("DELETE FROM scan_ports WHERE scan_id=?", (scan_id,))
+        if options["nmap"]:
+            _set_scan(scan_id, stage="Сканирование портов (nmap)", progress=5)
+            ports = nmap_discovery(scan["address"], scan["scan_ports"] or "1-65535", log_path)
+            stats["open_ports_raw"] = len(ports)
+            _log(log_path, f"open ports: {len(ports)}")
+
+            by_host = {}
             for p in ports:
-                is_web = 0
-                url = ""
-                title = p.get("title") or ""
-                if _looks_web(p["port"], p.get("service"), p.get("product"), title) and probe_budget > 0:
-                    probe_budget -= 1
-                    probe = probe_http(p["host"], p["port"])
-                    if probe:
-                        is_web = 1
-                        url = probe["url"]
-                        title = title or probe.get("title") or ""
-                        if url not in urls:
-                            urls.append(url)
-                con.execute(
-                    "INSERT INTO scan_ports (scan_id, host, port, proto, service, product, version, extrainfo, "
-                    "is_web, url, http_title) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (scan_id, p["host"], p["port"], p.get("proto") or "tcp", p.get("service") or "",
-                     p.get("product") or "", p.get("version") or "", p.get("extrainfo") or "", is_web, url, title),
-                )
+                by_host.setdefault(p["host"], []).append(p)
+            limited = []
+            for host, items in by_host.items():
+                if len(items) > MAX_PORTS_PER_HOST:
+                    _log(log_path, f"!! {host}: {len(items)} open ports reported, limiting to {MAX_PORTS_PER_HOST}")
+                    stats["ports_truncated"] = True
+                    items = sorted(items, key=lambda x: (x["port"] not in COMMON_PORTS, x["port"]))[:MAX_PORTS_PER_HOST]
+                limited.extend(items)
+            ports = limited
+            stats["open_ports"] = len(ports)
+            stats["hosts"] = len({p["host"] for p in ports})
+            _set_scan(scan_id, stage="Определение сервисов (nmap -sV)", progress=25)
+            services = []
+            for host, host_items in by_host.items():
+                services.extend(nmap_services(host, [p["port"] for p in host_items], log_path))
+            svc_index = {(s["host"], s["port"]): s for s in services}
+            for p in ports:
+                svc = svc_index.get((p["host"], p["port"]))
+                if svc:
+                    p.update({k: svc[k] for k in ("service", "product", "version", "extrainfo", "title") if svc.get(k)})
+            _set_scan(scan_id, stage="Поиск веб-интерфейсов", progress=35)
+
+            probe_budget = int(os.environ.get("ASM_MAX_WEB_PROBES", "80"))
+            with db.connect() as con:
+                con.execute("DELETE FROM scan_ports WHERE scan_id=?", (scan_id,))
+                for p in ports:
+                    is_web = 0
+                    url = ""
+                    title = p.get("title") or ""
+                    if _looks_web(p["port"], p.get("service"), p.get("product"), title) and probe_budget > 0:
+                        probe_budget -= 1
+                        probe = probe_http(p["host"], p["port"])
+                        if probe:
+                            is_web = 1
+                            url = probe["url"]
+                            title = title or probe.get("title") or ""
+                            if url not in urls:
+                                urls.append(url)
+                    con.execute(
+                        "INSERT INTO scan_ports (scan_id, host, port, proto, service, product, version, extrainfo, "
+                        "is_web, url, http_title) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                        (scan_id, p["host"], p["port"], p.get("proto") or "tcp", p.get("service") or "",
+                         p.get("product") or "", p.get("version") or "", p.get("extrainfo") or "", is_web, url, title),
+                    )
+        else:
+            _log(log_path, "nmap отключён в опциях скана")
+            if options["nuclei"] or options["zap"]:
+                urls = _seed_urls(scan["address"], log_path)
         stats["web_urls"] = len(urls)
         _log(log_path, f"web urls: {urls}")
 
-        _set_scan(scan_id, stage="Сканирование уязвимостей (nuclei)", progress=50)
-        nuclei_findings = run_nuclei(urls, scan["nuclei_severity"], log_path)
-        stats["nuclei"] = len(nuclei_findings)
+        nuclei_findings = []
+        if options["nuclei"]:
+            _set_scan(scan_id, stage="Сканирование уязвимостей (nuclei)", progress=50)
+            nuclei_findings = run_nuclei(urls, scan["nuclei_severity"], log_path)
+            stats["nuclei"] = len(nuclei_findings)
+        else:
+            _log(log_path, "nuclei отключён в опциях скана")
+
+        brute_findings = []
+        if options["brute"]:
+            _set_scan(scan_id, stage="Проверка слабых паролей", progress=65)
+            brute_findings = _run_brute(scan, ports, log_path)
+            stats["brute"] = len(brute_findings)
+        else:
+            _log(log_path, "проверка слабых паролей отключена в опциях скана")
 
         zap_findings = []
-        if scan["zap_mode"] in ("baseline", "full") and urls:
+        if options["zap"] and scan["zap_mode"] in ("baseline", "full") and urls:
             limit = int(os.environ.get("ASM_ZAP_MAX_URLS", "5"))
-            _set_scan(scan_id, stage=f"Сканирование ZAP ({scan['zap_mode']})", progress=65)
+            _set_scan(scan_id, stage=f"Сканирование ZAP ({scan['zap_mode']})", progress=80)
             zap_findings = run_zap_urls(urls[:limit], scan["zap_mode"], scan_id, log_path)
+        elif not options["zap"]:
+            _log(log_path, "ZAP отключён в опциях скана")
         stats["zap"] = len(zap_findings)
 
         _set_scan(scan_id, stage="Сохранение результатов", progress=90)
         seen = set()
-        for item in nuclei_findings + zap_findings:
+        for item in nuclei_findings + brute_findings + zap_findings:
             fp_key = (item["source"], item.get("template_id"), item.get("url"))
             if fp_key in seen:
                 continue
@@ -621,7 +736,7 @@ _scheduler_thread = None
 _stop = threading.Event()
 
 
-def enqueue(target_id):
+def enqueue(target_id, options=None):
     import queue as _q
     global _queue
     if _queue is None:
@@ -632,9 +747,10 @@ def enqueue(target_id):
     )
     if existing:
         return existing["id"], False
+    opts = _scan_options(options)
     scan_id = db.execute(
-        "INSERT INTO scans (target_id, status, stage, progress, created_at) VALUES (?,?,?,?,?)",
-        (target_id, "queued", "В очереди", 0, db.now()),
+        "INSERT INTO scans (target_id, status, stage, progress, options, created_at) VALUES (?,?,?,?,?,?)",
+        (target_id, "queued", "В очереди", 0, json.dumps(opts, ensure_ascii=False), db.now()),
     )
     _queue.put(scan_id)
     return scan_id, True

@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS scans (
     status TEXT NOT NULL DEFAULT 'queued',
     stage TEXT NOT NULL DEFAULT 'В очереди',
     progress INTEGER NOT NULL DEFAULT 0,
+    options TEXT,
     started_at TEXT,
     finished_at TEXT,
     error TEXT,
@@ -130,6 +131,10 @@ def connect():
 def init_db():
     with connect() as con:
         con.executescript(SCHEMA)
+        # Миграция для баз, созданных до появления выбора модулей скана.
+        cols = {row["name"] for row in con.execute("PRAGMA table_info(scans)")}
+        if "options" not in cols:
+            con.execute("ALTER TABLE scans ADD COLUMN options TEXT")
 
 
 def query(sql, args=()):
