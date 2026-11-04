@@ -4,7 +4,7 @@
 <div class="page-head">
   <div>
     <h1>{{ target.name }}</h1>
-    <p class="muted mono">{{ target.address }} · каждые {{ target.interval_hours }} ч · ZAP: {{ target.zap_mode }}</p>
+    <p class="muted mono">{{ target.address }}</p>
   </div>
   <div class="head-actions">
     <a class="btn primary" href="/scans/new?target={{ target.id }}">Сканировать</a>
@@ -15,9 +15,9 @@
 
 <div class="cards small-cards">
   <div class="card"><div class="k">Последний скан</div><div class="v sm">{{ target.last_scan_at | dt }}</div></div>
-  <div class="card"><div class="k">Следующий скан</div><div class="v sm">{{ target.next_scan_at | dt }}</div></div>
-  <div class="card"><div class="k">Статус</div><div class="v sm">{{ 'включена' if target.enabled else 'выключена' }}</div></div>
+  <div class="card"><div class="k">Регулярных сканов</div><div class="v sm"><a href="/scans">{{ schedule_count }}</a></div></div>
   <div class="card"><div class="k">Находок</div><div class="v sm">{{ findings | length }}</div></div>
+  <div class="card"><div class="k">Открытых портов</div><div class="v sm">{{ ports | length }}</div></div>
 </div>
 
 <div id="active-block" class="hidden">

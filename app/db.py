@@ -2,7 +2,7 @@ import json
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.environ.get("ASM_DATA_DIR", os.path.join(BASE_DIR, "data"))
@@ -112,6 +112,20 @@ CREATE TABLE IF NOT EXISTS brute_config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_id INTEGER NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+    interval_hours INTEGER NOT NULL DEFAULT 24,
+    scan_ports TEXT NOT NULL DEFAULT '1-65535',
+    zap_mode TEXT NOT NULL DEFAULT 'baseline',
+    nuclei_severity TEXT NOT NULL DEFAULT 'critical,high,medium,low,info',
+    options TEXT NOT NULL DEFAULT '{}',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    next_run_at TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_schedules_next ON schedules(enabled, next_run_at);
 """
 
 DEFAULT_BRUTE_LISTS = {
@@ -163,6 +177,21 @@ def init_db():
                 "INSERT OR IGNORE INTO brute_config (key, value) VALUES (?,?)",
                 (key, json.dumps(values, ensure_ascii=False)),
             )
+        # Одноразовый перенос старых расписаний с целей на таблицу schedules.
+        migrated = con.execute("SELECT value FROM meta WHERE key='schedules_migrated'").fetchone()
+        if not migrated:
+            default_options = json.dumps({"nmap": True, "brute": False, "nuclei": True, "zap": True})
+            for target in con.execute("SELECT * FROM targets WHERE enabled=1"):
+                hours = max(1, int(target["interval_hours"] or 24))
+                next_run = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat(timespec="seconds")
+                con.execute(
+                    "INSERT INTO schedules (target_id, interval_hours, scan_ports, zap_mode, nuclei_severity, "
+                    "options, enabled, next_run_at, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (target["id"], target["interval_hours"] or 24, target["scan_ports"] or "1-65535",
+                     target["zap_mode"] or "baseline", target["nuclei_severity"] or "critical,high,medium,low,info",
+                     default_options, 1, next_run, now()),
+                )
+            con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schedules_migrated', '1')")
 
 
 def query(sql, args=()):

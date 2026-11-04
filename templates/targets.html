@@ -2,29 +2,27 @@
 {% block title %}Цели · ASM Sentinel{% endblock %}
 {% block content %}
 <div class="page-head">
-  <div><h1>Цели</h1><p class="muted">Активы, которые сканируются по расписанию</p></div>
+  <div><h1>Цели</h1><p class="muted">Активы, которые можно сканировать</p></div>
   <a class="btn primary" href="/targets/new">+ Добавить цель</a>
 </div>
 
 {% if targets %}
 <table class="table">
   <thead>
-    <tr><th>Название</th><th>Адрес</th><th>Расписание</th><th>Последний скан</th><th>Следующий</th><th>Находки</th><th></th></tr>
+    <tr><th>Название</th><th>Адрес</th><th>Последний скан</th><th>Находки</th><th></th></tr>
   </thead>
   <tbody>
   {% for t in targets %}
     <tr>
-      <td><a href="/targets/{{ t.id }}">{{ t.name }}</a>{% if not t.enabled %} <span class="badge st-queued">выкл</span>{% endif %}</td>
+      <td><a href="/targets/{{ t.id }}">{{ t.name }}</a></td>
       <td class="mono">{{ t.address }}</td>
-      <td>каждые {{ t.interval_hours }} ч</td>
       <td>{{ t.last_scan_at | dt }}</td>
-      <td>{{ t.next_scan_at | dt }}</td>
       <td>
         {% if t.open_findings %}<a href="/findings?target={{ t.id }}">{{ t.open_findings }}</a>{% else %}0{% endif %}
         {% if t.risky %}<span class="badge sev-high">{{ t.risky }} high+</span>{% endif %}
       </td>
       <td class="actions">
-        <button class="btn small" data-scan="{{ t.id }}">Сканировать</button>
+        <a class="btn small" href="/scans/new?target={{ t.id }}">Сканировать</a>
         <a class="btn small ghost" href="/targets/{{ t.id }}/edit">Изменить</a>
       </td>
     </tr>
@@ -34,18 +32,4 @@
 {% else %}
 <div class="empty big">Целей пока нет. Добавьте первый актив — домен, IP или подсеть.</div>
 {% endif %}
-{% endblock %}
-{% block scripts %}
-<script>
-document.querySelectorAll('button[data-scan]').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    btn.disabled = true; btn.textContent = '...';
-    try {
-      const r = await fetch(`/api/targets/${btn.dataset.scan}/scan`, {method: 'POST'});
-      const data = await r.json();
-      if (data.scan_id) window.location = `/scans/${data.scan_id}`;
-    } catch (e) { btn.disabled = false; btn.textContent = 'Сканировать'; }
-  });
-});
-</script>
 {% endblock %}

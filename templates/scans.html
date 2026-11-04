@@ -2,10 +2,49 @@
 {% block title %}Сканирования · ASM Sentinel{% endblock %}
 {% block content %}
 <div class="page-head">
-  <div><h1>Сканирования</h1><p class="muted">История запусков и их результаты</p></div>
-  <div class="head-actions"><a class="btn primary" href="/scans/new">Новое сканирование</a></div>
+  <div><h1>Сканирования</h1><p class="muted">Регулярные запуски и история</p></div>
+  <div class="head-actions">
+    <a class="btn primary" href="/scans/new">Новое сканирование</a>
+    <a class="btn ghost" href="/schedules/new">+ Регулярное</a>
+  </div>
 </div>
 
+<h2>Регулярные сканирования</h2>
+{% if schedules %}
+<table class="table compact">
+  <thead><tr><th>Цель</th><th>Регулярность</th><th>Следующий запуск</th><th>Модули</th><th>Порты</th><th>ZAP</th><th>nuclei</th><th></th></tr></thead>
+  <tbody>
+  {% for s in schedules %}
+    {% set o = s.options | from_json %}
+    <tr>
+      <td><a href="/targets/{{ s.target_id }}">{{ s.target_name }}</a><div class="muted small mono">{{ s.address }}</div></td>
+      <td>каждые {{ s.interval_hours }} ч</td>
+      <td class="small">{{ s.next_run_at | dt }}</td>
+      <td class="small">
+        {% if o.get('nmap', True) %}<span class="badge">nmap</span>{% endif %}
+        {% if o.get('brute') %}<span class="badge">brute</span>{% endif %}
+        {% if o.get('nuclei', True) %}<span class="badge">nuclei</span>{% endif %}
+        {% if o.get('zap', True) %}<span class="badge">ZAP</span>{% endif %}
+      </td>
+      <td class="mono small">{{ s.scan_ports }}</td>
+      <td class="small">{{ s.zap_mode }}</td>
+      <td class="small">{{ s.nuclei_severity }}</td>
+      <td class="actions">
+        <a class="btn small ghost" href="/schedules/{{ s.id }}/edit">Изменить</a>
+        <form method="post" action="/schedules/{{ s.id }}/delete" class="inline-form" onsubmit="return confirm('Удалить регулярное сканирование?')">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="btn small danger" type="submit">Удалить</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">Регулярных сканирований нет. <a href="/schedules/new">Добавить →</a></div>
+{% endif %}
+
+<h2>История сканирований</h2>
 <form class="filters" method="get" action="/scans">
   <select name="target">
     <option value="">Все цели</option>
@@ -43,7 +82,7 @@
   </tbody>
 </table>
 {% else %}
-<div class="empty big">Сканирований нет. Запустите скан из карточки цели.</div>
+<div class="empty big">Сканирований нет.</div>
 {% endif %}
 
 {% if pages > 1 %}

@@ -61,16 +61,19 @@ def normalize_ports(value):
 
 
 def _scan_params_from_form(form):
-    try:
-        interval = max(1, int(form.get("interval_hours") or 24))
-    except (TypeError, ValueError):
-        interval = 24
     scan_ports = normalize_ports(str(form.get("scan_ports") or "1-65535"))
     zap_mode = str(form.get("zap_mode") or "baseline")
     if zap_mode not in ("baseline", "full", "off"):
         zap_mode = "baseline"
     nuclei_severity = str(form.get("nuclei_severity") or "critical,high,medium,low,info").strip()
-    return interval, scan_ports, zap_mode, (nuclei_severity or "critical,high,medium,low,info")
+    return scan_ports, zap_mode, (nuclei_severity or "critical,high,medium,low,info")
+
+
+def _schedule_interval(form):
+    try:
+        return max(1, int(form.get("interval_hours") or 24))
+    except (TypeError, ValueError):
+        return 24
 
 app = FastAPI(title="ASM Sentinel", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -247,16 +250,12 @@ async def target_create(request: Request):
     address = normalize_address(str(form.get("address", "")))
     if not name or not address:
         return redirect("/targets/new", "Заполните название и корректный адрес")
-    enabled = 1 if form.get("enabled") else 0
-    interval = 24
-    next_run = ((datetime.now(timezone.utc) + timedelta(hours=interval)).isoformat(timespec="seconds")
-                if enabled else None)
     target_id = db.execute(
         "INSERT INTO targets (name, address, enabled, interval_hours, scan_ports, zap_mode, nuclei_severity, created_at, next_scan_at) "
         "VALUES (?,?,?,?,?,?,?,?,?)",
-        (name, address, enabled, interval, "1-65535", "baseline", "critical,high,medium,low,info", db.now(), next_run),
+        (name, address, 0, 24, "1-65535", "baseline", "critical,high,medium,low,info", db.now(), None),
     )
-    return redirect(f"/targets/{target_id}", "Цель добавлена. Параметры сканирования задаются в «Новое сканирование»")
+    return redirect(f"/targets/{target_id}", "Цель добавлена. Регулярность и параметры сканов — в «Сканированиях»")
 
 
 @app.get("/targets/{target_id}", response_class=HTMLResponse)
@@ -272,8 +271,9 @@ def target_detail(request: Request, target_id: int):
     )
     latest = scans[0]["id"] if scans else None
     ports = db.query("SELECT * FROM scan_ports WHERE scan_id=? ORDER BY port", (latest,)) if latest else []
+    schedule_count = db.query_one("SELECT COUNT(*) AS c FROM schedules WHERE target_id=?", (target_id,))["c"]
     return render(request, "target_detail.html", target=target, scans=scans, findings=findings, ports=ports,
-                  latest_scan=latest)
+                  latest_scan=latest, schedule_count=schedule_count)
 
 
 @app.get("/targets/{target_id}/edit", response_class=HTMLResponse)
@@ -289,22 +289,12 @@ async def target_update(request: Request, target_id: int):
     form = await request.form()
     if not csrf_ok(request, str(form.get("csrf", ""))):
         return redirect(f"/targets/{target_id}", "Ошибка CSRF, повторите")
-    enabled = 1 if form.get("enabled") else 0
     address = normalize_address(str(form.get("address", "")))
     if not address:
         return redirect(f"/targets/{target_id}/edit", "Некорректный адрес")
-    row = db.query_one("SELECT enabled, interval_hours, next_scan_at FROM targets WHERE id=?", (target_id,))
-    if not row:
-        return redirect("/targets", "Цель не найдена")
-    if not enabled:
-        next_run = None
-    elif row["enabled"] and row["next_scan_at"]:
-        next_run = row["next_scan_at"]
-    else:
-        next_run = (datetime.now(timezone.utc) + timedelta(hours=max(1, int(row["interval_hours"] or 24)))).isoformat(timespec="seconds")
     db.execute(
-        "UPDATE targets SET name=?, address=?, enabled=?, next_scan_at=? WHERE id=?",
-        (str(form.get("name", "")).strip(), address, enabled, next_run, target_id),
+        "UPDATE targets SET name=?, address=? WHERE id=?",
+        (str(form.get("name", "")).strip(), address, target_id),
     )
     return redirect(f"/targets/{target_id}", "Сохранено")
 
@@ -386,15 +376,18 @@ def scans_page(request: Request, target: int | None = None, status: str = "", pa
     )
     qs = urllib.parse.urlencode({k: v for k, v in {"target": target or "", "status": status}.items() if v})
     targets = db.query("SELECT id, name FROM targets ORDER BY name")
+    schedules = db.query(
+        "SELECT s.*, t.name AS target_name, t.address FROM schedules s JOIN targets t ON t.id=s.target_id "
+        "ORDER BY s.id"
+    )
     return render(request, "scans.html", scans=rows, page=page, pages=max(1, (total + per - 1) // per),
-                  total=total, qs=qs, target_id=target, status=status, targets=targets)
+                  total=total, qs=qs, target_id=target, status=status, targets=targets, schedules=schedules)
 
 
 @app.get("/scans/new", response_class=HTMLResponse)
 def scan_new(request: Request, target: int | None = None):
     targets = db.query(
-        "SELECT id, name, address, interval_hours, scan_ports, zap_mode, nuclei_severity "
-        "FROM targets ORDER BY name"
+        "SELECT id, name, address, scan_ports, zap_mode, nuclei_severity FROM targets ORDER BY name"
     )
     selected_id = target if any(t["id"] == target for t in targets) else (targets[0]["id"] if targets else None)
     selected = next((t for t in targets if t["id"] == selected_id), None)
@@ -414,16 +407,111 @@ async def scan_create(request: Request):
     if not any(options.values()):
         return redirect(f"/scans/new?target={target_id}", "Выберите хотя бы один модуль")
     try:
-        interval, scan_ports, zap_mode, nuclei_severity = _scan_params_from_form(form)
+        scan_ports, zap_mode, nuclei_severity = _scan_params_from_form(form)
     except ValueError:
         return redirect(f"/scans/new?target={target_id}", "Некорректный список портов. Пример: 22,445,8000-8100")
-    db.execute(
-        "UPDATE targets SET interval_hours=?, scan_ports=?, zap_mode=?, nuclei_severity=? WHERE id=?",
-        (interval, scan_ports, zap_mode, nuclei_severity, target_id),
-    )
     params = {"scan_ports": scan_ports, "zap_mode": zap_mode, "nuclei_severity": nuclei_severity}
     scan_id, created = scanner.enqueue(target_id, options, params)
     return redirect(f"/scans/{scan_id}", "Сканирование поставлено в очередь" if created else "Сканирование уже выполняется")
+
+
+# ---------------------------------------------------------------- schedules
+
+def _schedule_form_context(schedule=None, target=None):
+    targets = db.query("SELECT id, name, address, scan_ports, zap_mode, nuclei_severity FROM targets ORDER BY name")
+    selected_id = None
+    if schedule is not None:
+        selected_id = schedule["target_id"]
+    elif target is not None:
+        selected_id = target
+    if selected_id is None and targets:
+        selected_id = targets[0]["id"]
+    selected = next((t for t in targets if t["id"] == selected_id), None)
+    if schedule is not None:
+        opts = scanner._scan_options(schedule["options"])
+    else:
+        opts = {"nmap": True, "brute": True, "nuclei": True, "zap": True}
+    return {"targets": targets, "target_id": selected_id, "selected": selected, "schedule": schedule, "opts": opts}
+
+
+@app.get("/schedules/new", response_class=HTMLResponse)
+def schedule_new(request: Request, target: int | None = None):
+    return render(request, "schedule_form.html", action="/schedules/new", **_schedule_form_context(target=target))
+
+
+@app.post("/schedules/new")
+async def schedule_create(request: Request):
+    form = await request.form()
+    if not csrf_ok(request, str(form.get("csrf", ""))):
+        return redirect("/schedules/new", "Ошибка CSRF, повторите")
+    raw_target = str(form.get("target", ""))
+    target_id = int(raw_target) if raw_target.isdigit() else 0
+    if not db.query_one("SELECT id FROM targets WHERE id=?", (target_id,)):
+        return redirect("/schedules/new", "Выберите цель")
+    options = {key: bool(form.get(key)) for key in SCAN_OPTION_KEYS}
+    if not any(options.values()):
+        return redirect(f"/schedules/new?target={target_id}", "Выберите хотя бы один модуль")
+    try:
+        scan_ports, zap_mode, nuclei_severity = _scan_params_from_form(form)
+    except ValueError:
+        return redirect(f"/schedules/new?target={target_id}", "Некорректный список портов")
+    interval = _schedule_interval(form)
+    next_run = (datetime.now(timezone.utc) + timedelta(hours=interval)).isoformat(timespec="seconds")
+    db.execute(
+        "INSERT INTO schedules (target_id, interval_hours, scan_ports, zap_mode, nuclei_severity, options, enabled, "
+        "next_run_at, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (target_id, interval, scan_ports, zap_mode, nuclei_severity,
+         json.dumps(options, ensure_ascii=False), 1, next_run, db.now()),
+    )
+    return redirect("/scans", "Регулярное сканирование добавлено")
+
+
+@app.get("/schedules/{schedule_id}/edit", response_class=HTMLResponse)
+def schedule_edit(request: Request, schedule_id: int):
+    schedule = db.query_one("SELECT * FROM schedules WHERE id=?", (schedule_id,))
+    if not schedule:
+        return redirect("/scans", "Регулярное сканирование не найдено")
+    return render(request, "schedule_form.html", action=f"/schedules/{schedule_id}/edit",
+                  **_schedule_form_context(schedule=schedule))
+
+
+@app.post("/schedules/{schedule_id}/edit")
+async def schedule_update(request: Request, schedule_id: int):
+    form = await request.form()
+    if not csrf_ok(request, str(form.get("csrf", ""))):
+        return redirect("/scans", "Ошибка CSRF, повторите")
+    schedule = db.query_one("SELECT * FROM schedules WHERE id=?", (schedule_id,))
+    if not schedule:
+        return redirect("/scans", "Регулярное сканирование не найдено")
+    raw_target = str(form.get("target", ""))
+    target_id = int(raw_target) if raw_target.isdigit() else 0
+    if not db.query_one("SELECT id FROM targets WHERE id=?", (target_id,)):
+        return redirect(f"/schedules/{schedule_id}/edit", "Выберите цель")
+    options = {key: bool(form.get(key)) for key in SCAN_OPTION_KEYS}
+    if not any(options.values()):
+        return redirect(f"/schedules/{schedule_id}/edit", "Выберите хотя бы один модуль")
+    try:
+        scan_ports, zap_mode, nuclei_severity = _scan_params_from_form(form)
+    except ValueError:
+        return redirect(f"/schedules/{schedule_id}/edit", "Некорректный список портов")
+    interval = _schedule_interval(form)
+    next_run = (datetime.now(timezone.utc) + timedelta(hours=interval)).isoformat(timespec="seconds")
+    db.execute(
+        "UPDATE schedules SET target_id=?, interval_hours=?, scan_ports=?, zap_mode=?, nuclei_severity=?, options=?, "
+        "next_run_at=? WHERE id=?",
+        (target_id, interval, scan_ports, zap_mode, nuclei_severity,
+         json.dumps(options, ensure_ascii=False), next_run, schedule_id),
+    )
+    return redirect("/scans", "Регулярное сканирование обновлено")
+
+
+@app.post("/schedules/{schedule_id}/delete")
+async def schedule_delete(request: Request, schedule_id: int):
+    form = await request.form()
+    if not csrf_ok(request, str(form.get("csrf", ""))):
+        return redirect("/scans", "Ошибка CSRF, повторите")
+    db.execute("DELETE FROM schedules WHERE id=?", (schedule_id,))
+    return redirect("/scans", "Регулярное сканирование удалено")
 
 
 @app.get("/scans/{scan_id}", response_class=HTMLResponse)
@@ -604,17 +692,6 @@ async def api_scan(target_id: int, request: Request):
             params["zap_mode"] = body["zap_mode"]
         if body.get("nuclei_severity"):
             params["nuclei_severity"] = str(body["nuclei_severity"]).strip()
-        if body.get("interval_hours"):
-            try:
-                db.execute("UPDATE targets SET interval_hours=? WHERE id=?", (max(1, int(body["interval_hours"])), target_id))
-            except (TypeError, ValueError):
-                pass
-        if params:
-            db.execute(
-                "UPDATE targets SET scan_ports=COALESCE(?, scan_ports), zap_mode=COALESCE(?, zap_mode), "
-                "nuclei_severity=COALESCE(?, nuclei_severity) WHERE id=?",
-                (params.get("scan_ports"), params.get("zap_mode"), params.get("nuclei_severity"), target_id),
-            )
         params = params or None
     scan_id, created = scanner.enqueue(target_id, options, params)
     return JSONResponse({"scan_id": scan_id, "created": created})

@@ -717,21 +717,17 @@ def run_pipeline(scan_id):
 
         _set_scan(scan_id, status="done", stage="Завершено", progress=100, finished_at=db.now(),
                   stats=json.dumps(stats, ensure_ascii=False))
-        db.execute("UPDATE targets SET last_scan_at=?, next_scan_at=? WHERE id=?",
-                   (db.now(), _next_run(scan["target_id"]), target_id))
+        db.execute("UPDATE targets SET last_scan_at=? WHERE id=?", (db.now(), target_id))
         _log(log_path, f"=== done: {stats} ===")
     except Exception as exc:
         tb = traceback.format_exc()
         _log(log_path, "!! pipeline failed:\n" + tb)
         _set_scan(scan_id, status="failed", stage="Ошибка", error=str(exc)[:2000], finished_at=db.now())
-        db.execute("UPDATE targets SET last_scan_at=?, next_scan_at=? WHERE id=?",
-                   (db.now(), _next_run(target_id), target_id))
+        db.execute("UPDATE targets SET last_scan_at=? WHERE id=?", (db.now(), target_id))
 
 
-def _next_run(target_id):
+def _next_run_for(hours):
     from datetime import datetime, timedelta, timezone
-    row = db.query_one("SELECT interval_hours FROM targets WHERE id=?", (target_id,))
-    hours = row["interval_hours"] if row else 24
     return (datetime.now(timezone.utc) + timedelta(hours=max(1, int(hours or 24)))).isoformat(timespec="seconds")
 
 
@@ -789,12 +785,18 @@ def _scheduler():
     while not _stop.is_set():
         try:
             due = db.query(
-                "SELECT id FROM targets WHERE enabled=1 AND (next_scan_at IS NULL OR next_scan_at<=?)",
+                "SELECT * FROM schedules WHERE enabled=1 AND (next_run_at IS NULL OR next_run_at<=?)",
                 (db.now(),),
             )
             for row in due:
-                enqueue(row["id"])
-                db.execute("UPDATE targets SET next_scan_at=? WHERE id=?", (_next_run(row["id"]), row["id"]))
+                opts = _scan_options(row["options"])
+                params = {
+                    "scan_ports": row["scan_ports"],
+                    "zap_mode": row["zap_mode"],
+                    "nuclei_severity": row["nuclei_severity"],
+                }
+                enqueue(row["target_id"], opts, params)
+                db.execute("UPDATE schedules SET next_run_at=? WHERE id=?", (_next_run_for(row["interval_hours"]), row["id"]))
         except Exception:
             traceback.print_exc()
         _stop.wait(30)

@@ -2,7 +2,7 @@
 {% block title %}Новое сканирование · ASM Sentinel{% endblock %}
 {% block content %}
 <div class="page-head">
-  <div><h1>Новое сканирование</h1><p class="muted">Цель, параметры и модули</p></div>
+  <div><h1>Новое сканирование</h1><p class="muted">Разовый запуск по выбранным сканерам</p></div>
   <a class="btn ghost" href="/scans">← К списку</a>
 </div>
 
@@ -14,7 +14,6 @@
     <select name="target" id="target-select" required>
       {% for t in targets %}
       <option value="{{ t.id }}"
-              data-interval="{{ t.interval_hours }}"
               data-ports="{{ t.scan_ports }}"
               data-zap="{{ t.zap_mode }}"
               data-severity="{{ t.nuclei_severity }}"
@@ -23,13 +22,8 @@
     </select>
   </div>
 
-  <div class="row">
-    <div class="field">
-      <label>Интервал расписания, часов</label>
-      <input type="number" id="interval-hours" name="interval_hours" min="1"
-             value="{{ selected.interval_hours if selected else 24 }}">
-      <div class="hint">Используется для автоматических сканов этой цели.</div>
-    </div>
+  <div class="scanner-group">
+    <label class="check"><input type="checkbox" name="nmap" value="1" checked> <b>nmap</b> — порты и сервисы</label>
     <div class="field">
       <label>Порты nmap</label>
       <input type="text" id="scan-ports" name="scan_ports"
@@ -39,7 +33,23 @@
     </div>
   </div>
 
-  <div class="row">
+  <div class="scanner-group">
+    <label class="check"><input type="checkbox" name="brute" value="1" checked> <b>Слабые пароли</b> — SMB, SSH, MSSQL, PostgreSQL</label>
+    <div class="hint">Словари логинов и паролей — на вкладке <a href="/config">Конфигурация</a>. Найденные учётные данные добавляются как уязвимость critical.</div>
+  </div>
+
+  <div class="scanner-group">
+    <label class="check"><input type="checkbox" name="nuclei" value="1" checked> <b>nuclei</b> — известные уязвимости</label>
+    <div class="field">
+      <label>Критичность nuclei</label>
+      <input type="text" id="nuclei-severity" name="nuclei_severity"
+             value="{{ selected.nuclei_severity if selected else 'critical,high,medium,low,info' }}">
+      <div class="hint">Через запятую: critical,high,medium,low,info</div>
+    </div>
+  </div>
+
+  <div class="scanner-group">
+    <label class="check"><input type="checkbox" name="zap" id="zap-check" value="1" checked> <b>ZAP</b> — сканирование веб-приложений</label>
     <div class="field">
       <label>Режим ZAP</label>
       <select name="zap_mode" id="zap-mode">
@@ -49,23 +59,7 @@
         <option value="off" {{ 'selected' if zm == 'off' }}>off — без ZAP</option>
       </select>
     </div>
-    <div class="field">
-      <label>Критичность nuclei</label>
-      <input type="text" id="nuclei-severity" name="nuclei_severity"
-             value="{{ selected.nuclei_severity if selected else 'critical,high,medium,low,info' }}">
-      <div class="hint">Через запятую: critical,high,medium,low,info</div>
-    </div>
   </div>
-
-  <label class="check"><input type="checkbox" name="nmap" value="1" checked> nmap — порты и сервисы</label>
-  <div class="hint">Без nmap nuclei и ZAP проверят только адрес цели.</div>
-
-  <label class="check"><input type="checkbox" name="brute" value="1" checked> Проверка слабых паролей (bruter.py)</label>
-  <div class="hint">SMB, SSH, MSSQL, PostgreSQL по словарям из «Конфигурации». Найденные учётные данные добавляются как уязвимость critical.</div>
-
-  <label class="check"><input type="checkbox" name="nuclei" value="1" checked> nuclei — известные уязвимости</label>
-
-  <label class="check"><input type="checkbox" name="zap" id="zap-check" value="1" checked> ZAP — сканирование веб-приложений</label>
 
   <div class="form-actions">
     <button class="btn primary" type="submit">Запустить</button>
@@ -75,7 +69,6 @@
 <script>
 (function () {
   const target = document.getElementById('target-select');
-  const interval = document.getElementById('interval-hours');
   const ports = document.getElementById('scan-ports');
   const zapMode = document.getElementById('zap-mode');
   const severity = document.getElementById('nuclei-severity');
@@ -88,17 +81,14 @@
     else if (!zapCheck.dataset.userTouched) zapCheck.checked = true;
   }
 
-  function applyTarget() {
+  target.addEventListener('change', function () {
     const option = target.options[target.selectedIndex];
-    interval.value = option.dataset.interval || 24;
     ports.value = option.dataset.ports || '1-65535';
     zapMode.value = option.dataset.zap || 'baseline';
     severity.value = option.dataset.severity || 'critical,high,medium,low,info';
     delete zapCheck.dataset.userTouched;
     syncZap();
-  }
-
-  target.addEventListener('change', applyTarget);
+  });
   zapMode.addEventListener('change', syncZap);
   zapCheck.addEventListener('change', function () { zapCheck.dataset.userTouched = '1'; });
   syncZap();

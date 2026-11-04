@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Изменить регулярное сканирование' if schedule else 'Новое регулярное сканирование' }} · ASM Sentinel{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ 'Изменить регулярное сканирование' if schedule else 'Новое регулярное сканирование' }}</h1>
+    <p class="muted">Цель, регулярность и параметры сканеров</p>
+  </div>
+  <a class="btn ghost" href="/scans">← К списку</a>
+</div>
+
+{% if targets %}
+<form method="post" action="{{ action }}" class="form-card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+
+  <div class="row">
+    <div class="field">
+      <label>Цель</label>
+      <select name="target" id="target-select" required>
+        {% for t in targets %}
+        <option value="{{ t.id }}"
+                data-ports="{{ t.scan_ports }}"
+                data-zap="{{ t.zap_mode }}"
+                data-severity="{{ t.nuclei_severity }}"
+                {{ 'selected' if target_id == t.id }}>{{ t.name }} — {{ t.address }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Регулярность, часов</label>
+      <input type="number" id="interval-hours" name="interval_hours" min="1"
+             value="{{ schedule.interval_hours if schedule else 24 }}">
+      <div class="hint">Следующий запуск — через указанный интервал.</div>
+    </div>
+  </div>
+
+  <div class="scanner-group">
+    <label class="check"><input type="checkbox" name="nmap" value="1" {{ 'checked' if opts.get('nmap', True) }}> <b>nmap</b> — порты и сервисы</label>
+    <div class="field">
+      <label>Порты nmap</label>
+      <input type="text" id="scan-ports" name="scan_ports"
+             placeholder="22,445 или 1-1000"
+             value="{{ schedule.scan_ports if schedule else (selected.scan_ports if selected else '1-65535') }}">
+      <div class="hint">Конкретные порты или диапазоны через запятую: 22,445,8000-8100.</div>
+    </div>
+  </div>
+
+  <div class="scanner-group">
+    <label class="check"><input type="checkbox" name="brute" value="1" {{ 'checked' if opts.get('brute') }}> <b>Слабые пароли</b> — SMB, SSH, MSSQL, PostgreSQL</label>
+    <div class="hint">Словари — на вкладке <a href="/config">Конфигурация</a>. Может заблокировать учётные записи, используйте осознанно.</div>
+  </div>
+
+  <div class="scanner-group">
+    <label class="check"><input type="checkbox" name="nuclei" value="1" {{ 'checked' if opts.get('nuclei', True) }}> <b>nuclei</b> — известные уязвимости</label>
+    <div class="field">
+      <label>Критичность nuclei</label>
+      <input type="text" id="nuclei-severity" name="nuclei_severity"
+             value="{{ schedule.nuclei_severity if schedule else (selected.nuclei_severity if selected else 'critical,high,medium,low,info') }}">
+      <div class="hint">Через запятую: critical,high,medium,low,info</div>
+    </div>
+  </div>
+
+  <div class="scanner-group">
+    <label class="check"><input type="checkbox" name="zap" id="zap-check" value="1" {{ 'checked' if opts.get('zap', True) }}> <b>ZAP</b> — сканирование веб-приложений</label>
+    <div class="field">
+      <label>Режим ZAP</label>
+      {% set zm = schedule.zap_mode if schedule else (selected.zap_mode if selected else 'baseline') %}
+      <select name="zap_mode" id="zap-mode">
+        <option value="baseline" {{ 'selected' if zm == 'baseline' }}>baseline — пассивный, быстрый</option>
+        <option value="full" {{ 'selected' if zm == 'full' }}>full — активный, долгий</option>
+        <option value="off" {{ 'selected' if zm == 'off' }}>off — без ZAP</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <button class="btn primary" type="submit">Сохранить</button>
+    <a class="btn ghost" href="/scans">Отмена</a>
+  </div>
+</form>
+<script>
+(function () {
+  const target = document.getElementById('target-select');
+  const ports = document.getElementById('scan-ports');
+  const zapMode = document.getElementById('zap-mode');
+  const severity = document.getElementById('nuclei-severity');
+  const zapCheck = document.getElementById('zap-check');
+
+  function syncZap() {
+    const off = zapMode.value === 'off';
+    zapCheck.disabled = off;
+    if (off) zapCheck.checked = false;
+    else if (!zapCheck.dataset.userTouched) zapCheck.checked = true;
+  }
+
+  target.addEventListener('change', function () {
+    if ({{ 'true' if schedule else 'false' }}) return;
+    const option = target.options[target.selectedIndex];
+    ports.value = option.dataset.ports || '1-65535';
+    zapMode.value = option.dataset.zap || 'baseline';
+    severity.value = option.dataset.severity || 'critical,high,medium,low,info';
+    delete zapCheck.dataset.userTouched;
+    syncZap();
+  });
+  zapMode.addEventListener('change', syncZap);
+  zapCheck.addEventListener('change', function () { zapCheck.dataset.userTouched = '1'; });
+  syncZap();
+})();
+</script>
+{% else %}
+<div class="empty big">Сначала создайте цель. <a href="/targets/new">Новая цель →</a></div>
+{% endif %}
+{% endblock %}

@@ -2,7 +2,7 @@
 {% block title %}{{ 'Изменить цель' if target else 'Новая цель' }} · ASM Sentinel{% endblock %}
 {% block content %}
 <div class="page-head">
-  <div><h1>{{ 'Изменить цель' if target else 'Новая цель' }}</h1><p class="muted">Только адрес и участие в расписании</p></div>
+  <div><h1>{{ 'Изменить цель' if target else 'Новая цель' }}</h1><p class="muted">Актив для сканирования</p></div>
   <a class="btn ghost" href="/targets">← К списку</a>
 </div>
 
@@ -17,11 +17,7 @@
     <input type="text" name="address" value="{{ target.address if target else '' }}" placeholder="example.com, 10.0.0.5 или 10.0.0.0/24" required>
     <div class="hint">Домен, IP или подсеть. Сканирование выполняется с сервера ASM Sentinel.</div>
   </div>
-  <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if (not target or target.enabled) }}> Сканировать по расписанию</label>
-  <div class="hint">Порты, интервал, режим ZAP и критичность nuclei задаются на странице «Новое сканирование» и сохраняются для этой цели.</div>
-  {% if target %}
-  <div class="hint">Текущие параметры: порты {{ target.scan_ports }}, ZAP {{ target.zap_mode }}, nuclei {{ target.nuclei_severity }}, интервал {{ target.interval_hours }} ч.</div>
-  {% endif %}
+  <div class="hint">Регулярность и параметры сканирования задаются в разделе «Сканирования».</div>
   <div class="form-actions">
     <button class="btn primary" type="submit">Сохранить</button>
     <a class="btn ghost" href="/targets">Отмена</a>
