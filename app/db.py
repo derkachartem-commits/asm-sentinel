@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -29,6 +30,9 @@ CREATE TABLE IF NOT EXISTS scans (
     stage TEXT NOT NULL DEFAULT 'В очереди',
     progress INTEGER NOT NULL DEFAULT 0,
     options TEXT,
+    scan_ports TEXT,
+    zap_mode TEXT,
+    nuclei_severity TEXT,
     started_at TEXT,
     finished_at TEXT,
     error TEXT,
@@ -103,7 +107,25 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS brute_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
+
+DEFAULT_BRUTE_LISTS = {
+    "smb_logins": ["Administrator", "Администратор", "localadmin", "admin", "vbrradmin"],
+    "unix_logins": ["root", "admin", "test", "vbrradmin"],
+    "common_passwords": ["1qaz@WSX", "P@ssw0rd", "1qaz!QAZ", "!QAZ2wsx", "!qaz2wsx",
+                          "12345678", "admin", "password", "123qweASD"],
+    "mssql_logins": ["sa"],
+    "mssql_passwords": ["qweasdzxc", "1qaz!QAZ", "123qweASD"],
+    "pg_logins": ["postgres", "admin", "vbrradmin"],
+    "pg_passwords": ["postgres", "1qaz!QAZ", "123qweASD", "qweasdzxc", "P@ssw0rd",
+                      "1qaz@WSX", "!QAZ2wsx", "admin", "password", "12345678"],
+    "pg_databases": ["postgres", "template1"],
+}
 
 
 def now() -> str:
@@ -131,10 +153,16 @@ def connect():
 def init_db():
     with connect() as con:
         con.executescript(SCHEMA)
-        # Миграция для баз, созданных до появления выбора модулей скана.
+        # Миграция для баз, созданных до появления выбора модулей и параметров скана.
         cols = {row["name"] for row in con.execute("PRAGMA table_info(scans)")}
-        if "options" not in cols:
-            con.execute("ALTER TABLE scans ADD COLUMN options TEXT")
+        for column in ("options", "scan_ports", "zap_mode", "nuclei_severity"):
+            if column not in cols:
+                con.execute(f"ALTER TABLE scans ADD COLUMN {column} TEXT")
+        for key, values in DEFAULT_BRUTE_LISTS.items():
+            con.execute(
+                "INSERT OR IGNORE INTO brute_config (key, value) VALUES (?,?)",
+                (key, json.dumps(values, ensure_ascii=False)),
+            )
 
 
 def query(sql, args=()):

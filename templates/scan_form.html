@@ -2,7 +2,7 @@
 {% block title %}Новое сканирование · ASM Sentinel{% endblock %}
 {% block content %}
 <div class="page-head">
-  <div><h1>Новое сканирование</h1><p class="muted">Выберите модули, которые нужно запустить</p></div>
+  <div><h1>Новое сканирование</h1><p class="muted">Цель, параметры и модули</p></div>
   <a class="btn ghost" href="/scans">← К списку</a>
 </div>
 
@@ -13,22 +13,59 @@
     <label>Цель</label>
     <select name="target" id="target-select" required>
       {% for t in targets %}
-      <option value="{{ t.id }}" data-zap="{{ t.zap_mode }}" {{ 'selected' if target_id == t.id }}>{{ t.name }} — {{ t.address }}</option>
+      <option value="{{ t.id }}"
+              data-interval="{{ t.interval_hours }}"
+              data-ports="{{ t.scan_ports }}"
+              data-zap="{{ t.zap_mode }}"
+              data-severity="{{ t.nuclei_severity }}"
+              {{ 'selected' if target_id == t.id }}>{{ t.name }} — {{ t.address }}</option>
       {% endfor %}
     </select>
   </div>
 
-  <label class="check"><input type="checkbox" name="nmap" value="1" checked> nmap — порты и сервисы</label>
-  <div class="hint">Обнаружение открытых портов и определение сервисов. Без него nuclei и ZAP проверят только адрес цели.</div>
+  <div class="row">
+    <div class="field">
+      <label>Интервал расписания, часов</label>
+      <input type="number" id="interval-hours" name="interval_hours" min="1"
+             value="{{ selected.interval_hours if selected else 24 }}">
+      <div class="hint">Используется для автоматических сканов этой цели.</div>
+    </div>
+    <div class="field">
+      <label>Порты nmap</label>
+      <input type="text" id="scan-ports" name="scan_ports"
+             placeholder="22,445 или 1-1000"
+             value="{{ selected.scan_ports if selected else '1-65535' }}">
+      <div class="hint">Конкретные порты или диапазоны через запятую: 22,445,8000-8100.</div>
+    </div>
+  </div>
 
-  <label class="check"><input type="checkbox" name="brute" value="1"> Проверка слабых паролей (bruter.py)</label>
-  <div class="hint">SMB, SSH, MSSQL, PostgreSQL по словарям. Найденные учётные данные добавляются как уязвимость critical. Может заблокировать учётные записи — используйте осознанно.</div>
+  <div class="row">
+    <div class="field">
+      <label>Режим ZAP</label>
+      <select name="zap_mode" id="zap-mode">
+        {% set zm = selected.zap_mode if selected else 'baseline' %}
+        <option value="baseline" {{ 'selected' if zm == 'baseline' }}>baseline — пассивный, быстрый</option>
+        <option value="full" {{ 'selected' if zm == 'full' }}>full — активный, долгий</option>
+        <option value="off" {{ 'selected' if zm == 'off' }}>off — без ZAP</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Критичность nuclei</label>
+      <input type="text" id="nuclei-severity" name="nuclei_severity"
+             value="{{ selected.nuclei_severity if selected else 'critical,high,medium,low,info' }}">
+      <div class="hint">Через запятую: critical,high,medium,low,info</div>
+    </div>
+  </div>
+
+  <label class="check"><input type="checkbox" name="nmap" value="1" checked> nmap — порты и сервисы</label>
+  <div class="hint">Без nmap nuclei и ZAP проверят только адрес цели.</div>
+
+  <label class="check"><input type="checkbox" name="brute" value="1" checked> Проверка слабых паролей (bruter.py)</label>
+  <div class="hint">SMB, SSH, MSSQL, PostgreSQL по словарям из «Конфигурации». Найденные учётные данные добавляются как уязвимость critical.</div>
 
   <label class="check"><input type="checkbox" name="nuclei" value="1" checked> nuclei — известные уязвимости</label>
-  <div class="hint">Проверка веб-сервисов по шаблонам nuclei с критичностью из настроек цели.</div>
 
   <label class="check"><input type="checkbox" name="zap" id="zap-check" value="1" checked> ZAP — сканирование веб-приложений</label>
-  <div class="hint">Режим ZAP берётся из настроек цели (baseline/full/off).</div>
 
   <div class="form-actions">
     <button class="btn primary" type="submit">Запустить</button>
@@ -37,14 +74,33 @@
 </form>
 <script>
 (function () {
-  const select = document.getElementById('target-select');
-  const zap = document.getElementById('zap-check');
+  const target = document.getElementById('target-select');
+  const interval = document.getElementById('interval-hours');
+  const ports = document.getElementById('scan-ports');
+  const zapMode = document.getElementById('zap-mode');
+  const severity = document.getElementById('nuclei-severity');
+  const zapCheck = document.getElementById('zap-check');
+
   function syncZap() {
-    const mode = select.options[select.selectedIndex].dataset.zap || 'off';
-    zap.checked = mode !== 'off';
-    zap.disabled = mode === 'off';
+    const off = zapMode.value === 'off';
+    zapCheck.disabled = off;
+    if (off) zapCheck.checked = false;
+    else if (!zapCheck.dataset.userTouched) zapCheck.checked = true;
   }
-  select.addEventListener('change', syncZap);
+
+  function applyTarget() {
+    const option = target.options[target.selectedIndex];
+    interval.value = option.dataset.interval || 24;
+    ports.value = option.dataset.ports || '1-65535';
+    zapMode.value = option.dataset.zap || 'baseline';
+    severity.value = option.dataset.severity || 'critical,high,medium,low,info';
+    delete zapCheck.dataset.userTouched;
+    syncZap();
+  }
+
+  target.addEventListener('change', applyTarget);
+  zapMode.addEventListener('change', syncZap);
+  zapCheck.addEventListener('change', function () { zapCheck.dataset.userTouched = '1'; });
   syncZap();
 })();
 </script>

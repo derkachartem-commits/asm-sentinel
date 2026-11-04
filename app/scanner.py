@@ -248,6 +248,9 @@ def run_nuclei(urls, severity, log_path, timeout=2400):
            "-rate-limit", "150", "-bulk-size", "25", "-concurrency", "25",
            "-timeout", "10", "-retries", "1", "-etags", "dos,fuzz,bruteforce,intrusive,payloads",
            "-ni", "-duc", "-silent", "-nc"]
+    templates = os.environ.get("ASM_NUCLEI_TEMPLATES")
+    if templates:
+        cmd += ["-t", templates]
     _run(cmd, log_path, timeout=timeout)
     findings = []
     if os.path.exists(out_path):
@@ -598,8 +601,12 @@ def run_pipeline(scan_id):
     _ensure_dirs()
     log_path = os.path.join(LOG_DIR, f"scan-{scan_id}.log")
     scan = db.query_one(
-        "SELECT s.id AS scan_id, s.target_id, s.options, t.name AS target_name, t.address, t.scan_ports, "
-        "t.zap_mode, t.nuclei_severity FROM scans s JOIN targets t ON t.id = s.target_id WHERE s.id=?",
+        "SELECT s.id AS scan_id, s.target_id, s.options, "
+        "COALESCE(s.scan_ports, t.scan_ports) AS scan_ports, "
+        "COALESCE(s.zap_mode, t.zap_mode) AS zap_mode, "
+        "COALESCE(s.nuclei_severity, t.nuclei_severity) AS nuclei_severity, "
+        "t.name AS target_name, t.address "
+        "FROM scans s JOIN targets t ON t.id = s.target_id WHERE s.id=?",
         (scan_id,),
     )
     if not scan:
@@ -736,7 +743,7 @@ _scheduler_thread = None
 _stop = threading.Event()
 
 
-def enqueue(target_id, options=None):
+def enqueue(target_id, options=None, params=None):
     import queue as _q
     global _queue
     if _queue is None:
@@ -748,9 +755,17 @@ def enqueue(target_id, options=None):
     if existing:
         return existing["id"], False
     opts = _scan_options(options)
+    params = params or {}
+    scan_ports = str(params.get("scan_ports") or "").strip() or None
+    zap_mode = params.get("zap_mode")
+    if zap_mode not in ("baseline", "full", "off"):
+        zap_mode = None
+    nuclei_severity = str(params.get("nuclei_severity") or "").strip() or None
     scan_id = db.execute(
-        "INSERT INTO scans (target_id, status, stage, progress, options, created_at) VALUES (?,?,?,?,?,?)",
-        (target_id, "queued", "В очереди", 0, json.dumps(opts, ensure_ascii=False), db.now()),
+        "INSERT INTO scans (target_id, status, stage, progress, options, scan_ports, zap_mode, nuclei_severity, "
+        "created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (target_id, "queued", "В очереди", 0, json.dumps(opts, ensure_ascii=False),
+         scan_ports, zap_mode, nuclei_severity, db.now()),
     )
     _queue.put(scan_id)
     return scan_id, True

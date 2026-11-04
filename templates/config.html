@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Конфигурация · ASM Sentinel{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Конфигурация</h1><p class="muted">Словари для проверки слабых паролей</p></div>
+</div>
+
+<form method="post" action="/config" class="form-card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="hint">По одному значению на строку. Пустой список отключает соответствующую проверку.</div>
+
+  <div class="row">
+    <div class="field">
+      <label>SMB — логины</label>
+      <textarea name="smb_logins" rows="6">{{ lists.get('smb_logins', '') }}</textarea>
+    </div>
+    <div class="field">
+      <label>SSH/UNIX — логины</label>
+      <textarea name="unix_logins" rows="6">{{ lists.get('unix_logins', '') }}</textarea>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>SMB и SSH — пароли</label>
+    <textarea name="common_passwords" rows="10">{{ lists.get('common_passwords', '') }}</textarea>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label>MSSQL — логины</label>
+      <textarea name="mssql_logins" rows="4">{{ lists.get('mssql_logins', '') }}</textarea>
+    </div>
+    <div class="field">
+      <label>MSSQL — пароли</label>
+      <textarea name="mssql_passwords" rows="4">{{ lists.get('mssql_passwords', '') }}</textarea>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label>PostgreSQL — логины</label>
+      <textarea name="pg_logins" rows="6">{{ lists.get('pg_logins', '') }}</textarea>
+    </div>
+    <div class="field">
+      <label>PostgreSQL — пароли</label>
+      <textarea name="pg_passwords" rows="6">{{ lists.get('pg_passwords', '') }}</textarea>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>PostgreSQL — базы данных</label>
+    <textarea name="pg_databases" rows="3">{{ lists.get('pg_databases', '') }}</textarea>
+  </div>
+
+  <div class="form-actions">
+    <button class="btn primary" type="submit">Сохранить словари</button>
+  </div>
+</form>
+{% endblock %}

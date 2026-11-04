@@ -12,6 +12,7 @@
       {% if opts.get('nuclei', True) %}<span class="badge">nuclei</span>{% endif %}
       {% if opts.get('zap', True) %}<span class="badge">ZAP</span>{% endif %}
     </p>
+    <p class="small muted">Параметры: порты {{ scan.scan_ports or '—' }}, ZAP {{ scan.zap_mode or '—' }}, nuclei {{ scan.nuclei_severity or '—' }}</p>
   </div>
   <div class="head-actions">
     <a class="btn ghost" href="/scans/{{ scan.id }}/log" target="_blank">Лог</a>

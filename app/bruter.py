@@ -10,9 +10,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import time
+
+from . import db
 
 try:
     import paramiko
@@ -38,20 +41,42 @@ except Exception:  # pragma: no cover
 DEFAULT_PORTS = [445, 22, 1433, 1434, 1435, 5432]
 PORT_SERVICE = {445: "SMB", 22: "SSH", 1433: "MSSQL", 1434: "MSSQL", 1435: "MSSQL", 5432: "POSTGRES"}
 
-SMB_LOGINS = ["Administrator", "Администратор", "localadmin", "admin", "vbrradmin"]
-UNIX_LOGINS = ["root", "admin", "test", "vbrradmin"]
-COMMON_PASSWORDS = [
-    "1qaz@WSX", "P@ssw0rd", "1qaz!QAZ", "!QAZ2wsx", "!qaz2wsx",
-    "12345678", "admin", "password", "123qweASD",
-]
-MSSQL_LOGINS = ["sa"]
-MSSQL_PASSWORDS = ["qweasdzxc", "1qaz!QAZ", "123qweASD"]
-PG_LOGINS = ["postgres", "admin", "vbrradmin"]
-PG_PASSWORDS = [
-    "postgres", "1qaz!QAZ", "123qweASD", "qweasdzxc", "P@ssw0rd",
-    "1qaz@WSX", "!QAZ2wsx", "admin", "password", "12345678",
-]
-PG_DATABASES = ["postgres", "template1"]
+DEFAULT_LISTS = {
+    "smb_logins": ["Administrator", "Администратор", "localadmin", "admin", "vbrradmin"],
+    "unix_logins": ["root", "admin", "test", "vbrradmin"],
+    "common_passwords": [
+        "1qaz@WSX", "P@ssw0rd", "1qaz!QAZ", "!QAZ2wsx", "!qaz2wsx",
+        "12345678", "admin", "password", "123qweASD",
+    ],
+    "mssql_logins": ["sa"],
+    "mssql_passwords": ["qweasdzxc", "1qaz!QAZ", "123qweASD"],
+    "pg_logins": ["postgres", "admin", "vbrradmin"],
+    "pg_passwords": [
+        "postgres", "1qaz!QAZ", "123qweASD", "qweasdzxc", "P@ssw0rd",
+        "1qaz@WSX", "!QAZ2wsx", "admin", "password", "12345678",
+    ],
+    "pg_databases": ["postgres", "template1"],
+}
+
+
+def load_lists():
+    """Словари из вкладки «Конфигурация» с откатом на дефолты."""
+    data = {key: list(values) for key, values in DEFAULT_LISTS.items()}
+    try:
+        rows = db.query("SELECT key, value FROM brute_config")
+    except Exception:
+        return data
+    for row in rows:
+        key = row["key"]
+        if key not in data:
+            continue
+        try:
+            values = json.loads(row["value"])
+        except (TypeError, ValueError):
+            continue
+        if isinstance(values, list):
+            data[key] = [str(value).strip() for value in values if str(value).strip()]
+    return data
 
 MAX_ATTEMPTS = int(os.environ.get("ASM_BRUTE_MAX_ATTEMPTS", "200"))
 MAX_HOSTS = int(os.environ.get("ASM_BRUTE_MAX_HOSTS", "16"))
@@ -102,13 +127,13 @@ def _result(service, host, port, login, password, info, db=""):
     }
 
 
-def _smb_brute(host, port, log_path):
+def _smb_brute(host, port, log_path, lists):
     if SMBConnection is None:
         return []
     results = []
     attempts = 0
-    for user in SMB_LOGINS:
-        candidates = [user] + [p for p in COMMON_PASSWORDS if p != user]
+    for user in lists["smb_logins"]:
+        candidates = [user] + [p for p in lists["common_passwords"] if p != user]
         for password in candidates:
             if attempts >= MAX_ATTEMPTS:
                 return results
@@ -131,53 +156,72 @@ def _smb_brute(host, port, log_path):
     return results
 
 
-def _ssh_brute(host, port, log_path):
+def _ssh_brute(host, port, log_path, lists):
     if paramiko is None:
         return []
     results = []
     attempts = 0
-    for user in UNIX_LOGINS:
-        for password in COMMON_PASSWORDS:
+    retry_delay = float(os.environ.get("ASM_BRUTE_SSH_RETRY_DELAY", "2"))
+    for user in lists["unix_logins"]:
+        found_for_user = False
+        for password in lists["common_passwords"]:
             if attempts >= MAX_ATTEMPTS:
                 return results
             attempts += 1
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            try:
-                client.connect(
-                    host,
-                    port=port,
-                    username=user,
-                    password=password,
-                    timeout=CONNECT_TIMEOUT,
-                    banner_timeout=CONNECT_TIMEOUT,
-                    auth_timeout=CONNECT_TIMEOUT,
-                    allow_agent=False,
-                    look_for_keys=False,
-                )
-                results.append(_result("SSH", host, port, user, password, "UNIX Account Active"))
-                _log(log_path, f"SSH {host}:{port} — подобраны учётные данные {user}")
-                break
-            except paramiko.AuthenticationException:
-                continue
-            except Exception as exc:
-                # Сеть/баннер/таймаут: дальше долбить смысла нет.
-                _log(log_path, f"SSH {host}:{port} — проверка остановлена: {exc}")
-                return results
-            finally:
+            for attempt in range(3):
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 try:
-                    client.close()
-                except Exception:
-                    pass
+                    client.connect(
+                        host,
+                        port=port,
+                        username=user,
+                        password=password,
+                        timeout=CONNECT_TIMEOUT,
+                        banner_timeout=CONNECT_TIMEOUT,
+                        auth_timeout=CONNECT_TIMEOUT,
+                        allow_agent=False,
+                        look_for_keys=False,
+                    )
+                    results.append(_result("SSH", host, port, user, password, "UNIX Account Active"))
+                    _log(log_path, f"SSH {host}:{port} — подобраны учётные данные {user}")
+                    found_for_user = True
+                    break
+                except paramiko.AuthenticationException:
+                    # Обычный неверный пароль: пауза, чтобы sshd не включал
+                    # штраф за частые неудачные попытки.
+                    time.sleep(0.4)
+                    break
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    transient = any(marker in msg for marker in ("banner", "timed out", "reset", "aborted", "eof"))
+                    if transient and attempt < 2:
+                        delay = retry_delay * (attempt + 1)
+                        _log(log_path, f"SSH {host}:{port} — временная ошибка ({exc}), повтор через {delay:.0f}s")
+                        time.sleep(delay)
+                        continue
+                    _log(log_path, f"SSH {host}:{port} — проверка {user} пропущена: {exc}")
+                    time.sleep(retry_delay)
+                    break
+                finally:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+            if found_for_user:
+                break
+        if found_for_user:
+            break
+        time.sleep(0.3)
     return results
 
 
-def _mssql_brute(host, port, log_path):
+def _mssql_brute(host, port, log_path, lists):
     if pymssql is None:
         return []
     results = []
-    for user in MSSQL_LOGINS:
-        for password in MSSQL_PASSWORDS:
+    for user in lists["mssql_logins"]:
+        for password in lists["mssql_passwords"]:
             conn = None
             try:
                 conn = pymssql.connect(
@@ -198,14 +242,14 @@ def _mssql_brute(host, port, log_path):
     return results
 
 
-def _pg_brute(host, port, log_path):
+def _pg_brute(host, port, log_path, lists):
     if psycopg2 is None:
         return []
     results = []
     attempts = 0
-    for user in PG_LOGINS:
-        for password in PG_PASSWORDS:
-            for db in PG_DATABASES:
+    for user in lists["pg_logins"]:
+        for password in lists["pg_passwords"]:
+            for db in lists["pg_databases"]:
                 if attempts >= MAX_ATTEMPTS:
                     return results
                 attempts += 1
@@ -244,6 +288,7 @@ def check_host(host, ports=None, log_path=None):
     wanted = sorted({int(p) for p in (ports or DEFAULT_PORTS) if int(p) in PORT_SERVICE})
     if not wanted:
         wanted = list(DEFAULT_PORTS)
+    lists = load_lists()
     available = modules_available()
     deadline = time.time() + HOST_TIMEOUT
     results = []
@@ -261,13 +306,13 @@ def check_host(host, ports=None, log_path=None):
         _log(log_path, f"{host}:{port} {service} — проверка учётных данных")
         try:
             if service == "SMB":
-                results.extend(_smb_brute(host, port, log_path))
+                results.extend(_smb_brute(host, port, log_path, lists))
             elif service == "SSH":
-                results.extend(_ssh_brute(host, port, log_path))
+                results.extend(_ssh_brute(host, port, log_path, lists))
             elif service == "MSSQL":
-                results.extend(_mssql_brute(host, port, log_path))
+                results.extend(_mssql_brute(host, port, log_path, lists))
             else:
-                results.extend(_pg_brute(host, port, log_path))
+                results.extend(_pg_brute(host, port, log_path, lists))
         except Exception as exc:
             _log(log_path, f"{host}:{port} {service} — ошибка проверки: {exc}")
     return results

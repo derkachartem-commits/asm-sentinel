@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import auth, db, scanner
+from . import auth, bruter, db, scanner
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
@@ -30,6 +30,47 @@ STATUS_LABEL = {
 STATUS_ORDER = ["new", "in_progress", "fixed", "false_positive", "accepted"]
 SEV_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 SCAN_OPTION_KEYS = ("nmap", "brute", "nuclei", "zap")
+BRUTE_LIST_KEYS = tuple(bruter.DEFAULT_LISTS.keys())
+
+
+PORT_SPEC_RE = re.compile(r"^\d{1,5}(-\d{1,5})?$")
+
+
+def normalize_ports(value):
+    """Проверяет и нормализует список портов вида 22,445,8000-8100."""
+    raw = str(value or "").strip()
+    if not raw:
+        return "1-65535"
+    parts = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if not PORT_SPEC_RE.match(item):
+            raise ValueError("bad port: " + item)
+        if "-" in item:
+            start, end = (int(x) for x in item.split("-", 1))
+            if start < 1 or end > 65535 or start > end:
+                raise ValueError("bad range: " + item)
+        else:
+            port = int(item)
+            if port < 1 or port > 65535:
+                raise ValueError("bad port: " + item)
+        parts.append(item)
+    return ",".join(parts) or "1-65535"
+
+
+def _scan_params_from_form(form):
+    try:
+        interval = max(1, int(form.get("interval_hours") or 24))
+    except (TypeError, ValueError):
+        interval = 24
+    scan_ports = normalize_ports(str(form.get("scan_ports") or "1-65535"))
+    zap_mode = str(form.get("zap_mode") or "baseline")
+    if zap_mode not in ("baseline", "full", "off"):
+        zap_mode = "baseline"
+    nuclei_severity = str(form.get("nuclei_severity") or "critical,high,medium,low,info").strip()
+    return interval, scan_ports, zap_mode, (nuclei_severity or "critical,high,medium,low,info")
 
 app = FastAPI(title="ASM Sentinel", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -206,22 +247,16 @@ async def target_create(request: Request):
     address = normalize_address(str(form.get("address", "")))
     if not name or not address:
         return redirect("/targets/new", "Заполните название и корректный адрес")
-    try:
-        interval = max(1, int(form.get("interval_hours") or 24))
-    except ValueError:
-        interval = 24
-    zap_mode = str(form.get("zap_mode") or "baseline")
-    if zap_mode not in ("baseline", "full", "off"):
-        zap_mode = "baseline"
-    severity = str(form.get("nuclei_severity") or "critical,high,medium,low")
     enabled = 1 if form.get("enabled") else 0
+    interval = 24
+    next_run = ((datetime.now(timezone.utc) + timedelta(hours=interval)).isoformat(timespec="seconds")
+                if enabled else None)
     target_id = db.execute(
         "INSERT INTO targets (name, address, enabled, interval_hours, scan_ports, zap_mode, nuclei_severity, created_at, next_scan_at) "
         "VALUES (?,?,?,?,?,?,?,?,?)",
-        (name, address, enabled, interval, str(form.get("scan_ports") or "1-65535").strip(),
-         zap_mode, severity, db.now(), db.now() if enabled else None),
+        (name, address, enabled, interval, "1-65535", "baseline", "critical,high,medium,low,info", db.now(), next_run),
     )
-    return redirect(f"/targets/{target_id}", "Цель добавлена, сканирование запустится в течение минуты")
+    return redirect(f"/targets/{target_id}", "Цель добавлена. Параметры сканирования задаются в «Новое сканирование»")
 
 
 @app.get("/targets/{target_id}", response_class=HTMLResponse)
@@ -254,23 +289,22 @@ async def target_update(request: Request, target_id: int):
     form = await request.form()
     if not csrf_ok(request, str(form.get("csrf", ""))):
         return redirect(f"/targets/{target_id}", "Ошибка CSRF, повторите")
-    try:
-        interval = max(1, int(form.get("interval_hours") or 24))
-    except ValueError:
-        interval = 24
-    zap_mode = str(form.get("zap_mode") or "baseline")
-    if zap_mode not in ("baseline", "full", "off"):
-        zap_mode = "baseline"
     enabled = 1 if form.get("enabled") else 0
     address = normalize_address(str(form.get("address", "")))
     if not address:
         return redirect(f"/targets/{target_id}/edit", "Некорректный адрес")
+    row = db.query_one("SELECT enabled, interval_hours, next_scan_at FROM targets WHERE id=?", (target_id,))
+    if not row:
+        return redirect("/targets", "Цель не найдена")
+    if not enabled:
+        next_run = None
+    elif row["enabled"] and row["next_scan_at"]:
+        next_run = row["next_scan_at"]
+    else:
+        next_run = (datetime.now(timezone.utc) + timedelta(hours=max(1, int(row["interval_hours"] or 24)))).isoformat(timespec="seconds")
     db.execute(
-        "UPDATE targets SET name=?, address=?, enabled=?, interval_hours=?, scan_ports=?, zap_mode=?, nuclei_severity=?, "
-        "next_scan_at=COALESCE(next_scan_at, ?) WHERE id=?",
-        (str(form.get("name", "")).strip(), address, enabled, interval,
-         str(form.get("scan_ports") or "1-65535").strip(), zap_mode,
-         str(form.get("nuclei_severity") or "critical,high,medium,low"), db.now() if enabled else None, target_id),
+        "UPDATE targets SET name=?, address=?, enabled=?, next_scan_at=? WHERE id=?",
+        (str(form.get("name", "")).strip(), address, enabled, next_run, target_id),
     )
     return redirect(f"/targets/{target_id}", "Сохранено")
 
@@ -297,6 +331,38 @@ async def target_scan(request: Request, target_id: int):
         return redirect(f"/scans/new?target={target_id}", "Выберите хотя бы один модуль")
     scan_id, created = scanner.enqueue(target_id, options)
     return redirect(f"/scans/{scan_id}", "Сканирование поставлено в очередь" if created else "Сканирование уже выполняется")
+
+
+# ---------------------------------------------------------------- config
+
+@app.get("/config", response_class=HTMLResponse)
+def config_page(request: Request):
+    rows = db.query("SELECT key, value FROM brute_config")
+    data = {}
+    for row in rows:
+        try:
+            values = json.loads(row["value"])
+        except (TypeError, ValueError):
+            values = []
+        data[row["key"]] = "\n".join(str(v) for v in values) if isinstance(values, list) else ""
+    for key in BRUTE_LIST_KEYS:
+        data.setdefault(key, "\n".join(bruter.DEFAULT_LISTS[key]))
+    return render(request, "config.html", lists=data)
+
+
+@app.post("/config")
+async def config_save(request: Request):
+    form = await request.form()
+    if not csrf_ok(request, str(form.get("csrf", ""))):
+        return redirect("/config", "Ошибка CSRF, повторите")
+    for key in BRUTE_LIST_KEYS:
+        raw = str(form.get(key) or "")
+        values = [line.strip() for line in raw.splitlines() if line.strip()]
+        db.execute(
+            "INSERT OR REPLACE INTO brute_config (key, value) VALUES (?,?)",
+            (key, json.dumps(values, ensure_ascii=False)),
+        )
+    return redirect("/config", "Словари сохранены")
 
 
 # ---------------------------------------------------------------- scans
@@ -326,9 +392,13 @@ def scans_page(request: Request, target: int | None = None, status: str = "", pa
 
 @app.get("/scans/new", response_class=HTMLResponse)
 def scan_new(request: Request, target: int | None = None):
-    targets = db.query("SELECT id, name, address, zap_mode FROM targets ORDER BY name")
-    selected = target if any(t["id"] == target for t in targets) else (targets[0]["id"] if targets else None)
-    return render(request, "scan_form.html", targets=targets, target_id=selected)
+    targets = db.query(
+        "SELECT id, name, address, interval_hours, scan_ports, zap_mode, nuclei_severity "
+        "FROM targets ORDER BY name"
+    )
+    selected_id = target if any(t["id"] == target for t in targets) else (targets[0]["id"] if targets else None)
+    selected = next((t for t in targets if t["id"] == selected_id), None)
+    return render(request, "scan_form.html", targets=targets, target_id=selected_id, selected=selected)
 
 
 @app.post("/scans/new")
@@ -343,7 +413,16 @@ async def scan_create(request: Request):
     options = {key: bool(form.get(key)) for key in SCAN_OPTION_KEYS}
     if not any(options.values()):
         return redirect(f"/scans/new?target={target_id}", "Выберите хотя бы один модуль")
-    scan_id, created = scanner.enqueue(target_id, options)
+    try:
+        interval, scan_ports, zap_mode, nuclei_severity = _scan_params_from_form(form)
+    except ValueError:
+        return redirect(f"/scans/new?target={target_id}", "Некорректный список портов. Пример: 22,445,8000-8100")
+    db.execute(
+        "UPDATE targets SET interval_hours=?, scan_ports=?, zap_mode=?, nuclei_severity=? WHERE id=?",
+        (interval, scan_ports, zap_mode, nuclei_severity, target_id),
+    )
+    params = {"scan_ports": scan_ports, "zap_mode": zap_mode, "nuclei_severity": nuclei_severity}
+    scan_id, created = scanner.enqueue(target_id, options, params)
     return redirect(f"/scans/{scan_id}", "Сканирование поставлено в очередь" if created else "Сканирование уже выполняется")
 
 
@@ -506,6 +585,7 @@ async def api_scan(target_id: int, request: Request):
     if not db.query_one("SELECT id FROM targets WHERE id=?", (target_id,)):
         return JSONResponse({"error": "not found"}, status_code=404)
     options = None
+    params = None
     try:
         body = await request.json()
     except Exception:
@@ -514,7 +594,29 @@ async def api_scan(target_id: int, request: Request):
         options = {key: bool(body.get(key, True)) for key in SCAN_OPTION_KEYS}
         if not any(options.values()):
             return JSONResponse({"error": "no modules selected"}, status_code=400)
-    scan_id, created = scanner.enqueue(target_id, options)
+        params = {}
+        if body.get("scan_ports"):
+            try:
+                params["scan_ports"] = normalize_ports(body["scan_ports"])
+            except ValueError:
+                return JSONResponse({"error": "bad ports"}, status_code=400)
+        if body.get("zap_mode") in ("baseline", "full", "off"):
+            params["zap_mode"] = body["zap_mode"]
+        if body.get("nuclei_severity"):
+            params["nuclei_severity"] = str(body["nuclei_severity"]).strip()
+        if body.get("interval_hours"):
+            try:
+                db.execute("UPDATE targets SET interval_hours=? WHERE id=?", (max(1, int(body["interval_hours"])), target_id))
+            except (TypeError, ValueError):
+                pass
+        if params:
+            db.execute(
+                "UPDATE targets SET scan_ports=COALESCE(?, scan_ports), zap_mode=COALESCE(?, zap_mode), "
+                "nuclei_severity=COALESCE(?, nuclei_severity) WHERE id=?",
+                (params.get("scan_ports"), params.get("zap_mode"), params.get("nuclei_severity"), target_id),
+            )
+        params = params or None
+    scan_id, created = scanner.enqueue(target_id, options, params)
     return JSONResponse({"scan_id": scan_id, "created": created})
 
 
